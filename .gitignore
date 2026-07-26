@@ -20,3 +20,9 @@ htmlcov/
 data/*.db
 mlruns/
 .env
+
+# Downloaded datasets (fetched on demand into the cache, never committed)
+.cache/
+data/cache/
+*.csv.gz
+football_matches.csv

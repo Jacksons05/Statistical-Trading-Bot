@@ -1,0 +1,1 @@
+"""sttbot.economics package."""

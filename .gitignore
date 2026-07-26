@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Testing / tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Project data artifacts
+*.duckdb
+*.parquet
+data/*.db
+mlruns/
+.env

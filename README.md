@@ -28,11 +28,16 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | Module | What it provides |
 | --- | --- |
 | `data.storage` | `TickStore` — DuckDB-backed tick/order-book storage with Parquet export; `:memory:` for tests. |
-| `data.datasets` | Catalog of openly-licensed datasets + caching downloader (`STTBOT_DATA_DIR`), with checksum pinning. |
-| `data.football` | Loader for the open football dataset; overround and de-vig helpers. |
+| `data.datasets` | Catalog of openly-licensed datasets + caching downloader (`STTBOT_DATA_DIR`), with checksum pinning; `LIVE_ENDPOINTS` records the direct-egress APIs and their access requirements. |
+| `data.probe` | `python -m sttbot.data.probe` — re-measures which data hosts this machine can actually reach. |
+| `data.football` | Loaders for the bulk football dataset **and** football-data.co.uk season CSVs (the only wired-up source carrying a genuine closing line); overround and de-vig helpers. |
 | `strategies.base` | `Strategy` + `Param` — declarative hyperparameters with grid-search introspection (the `# @param` convention, made programmatic). |
 | `strategies.pead` | Micro-cap Post-Earnings Announcement Drift via Standardised Unexpected Earnings (SUE). |
 | `strategies.dixon_coles` | Dixon-Coles bivariate-Poisson model for low-scoring sports, plus +EV and Closing Line Value helpers. |
+| `strategies.dixon_coles_fit` | Weighted-MLE fitter for the above: per-team attack/defence, home advantage γ and dependence ρ, with exponential time decay, `mean(attack)=0` identifiability, and an analytic gradient. |
+| `backtest.walk_forward` | Walk-forward engine — fit on a trailing window, bet the next matchday, settle after friction. Look-ahead is structurally impossible, not merely intended. |
+| `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
+| `backtest.clv` | Closing-line-value **control**: what CLV a random selection earns on the same matches, so mechanical CLV is not mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
@@ -115,11 +120,60 @@ the full 230k rows:
   ~17 books and assume simultaneous availability, accounts everywhere, and
   stake limits that don't bind.
 
-**Not available without direct egress.** Prediction markets (Kalshi,
-Polymarket), exchange APIs (Binance, Coinbase), SEC EDGAR, and Stooq are all
-blocked under restrictive network policies; `datasets.BLOCKED_SOURCES` records
-them so their absence stays explicit. Live prediction-market arbitrage and
-equity PEAD both need those feeds.
+### Direct-egress sources
+
+Re-probed 2026-07-28 from an unrestricted network. An earlier sandbox returned
+403 for all of these, which was its allowlisting proxy rather than any upstream
+restriction — so a blanket 403 means "re-probe", not "the venue is gone". Run
+`python -m sttbot.data.probe` to re-measure from your own machine.
+
+| Host | Status | Notes |
+| --- | --- | --- |
+| `www.football-data.co.uk` | reachable | Per-season odds CSVs carrying **both** pre-match and closing prices — the only source here that supports real CLV |
+| `gamma-api.polymarket.com` | reachable | Public read API, no key |
+| `api.elections.kalshi.com` | reachable | Public read on `/trade-api/v2/markets`; trading needs a signed key |
+| `data.sec.gov` | reachable | 403s unless the User-Agent carries a contact address — set `STTBOT_USER_AGENT` |
+| `stooq.com` | reachable | Free daily OHLCV; rate-limited |
+| `api.exchange.coinbase.com` | reachable | Public read endpoints |
+| `api.binance.com` | **blocked** | HTTP 451 geo-restriction, not a proxy. Use Coinbase instead |
+
+## Walk-forward results on real odds
+
+`python examples/backtest_dixon_coles.py` fits the model on a trailing two-year
+window, bets the next matchday, and settles after 2% commission. Seven seasons
+(2018/19–2024/25), English tiers 1–4 plus Scotland, ~2,600 matches per division.
+
+**The model does not beat these markets.** Every division loses money, and
+against a single book its closing-line value is *negative* — it is
+systematically taking worse prices than the market closes at, which is a
+stronger indictment than the P&L, because CLV carries no settlement variance.
+
+| Division | Entry | Bets | ROI | Mean CLV | Random CLV | Skill |
+| --- | --- | --- | --- | --- | --- | --- |
+| E0 (Premier League) | single-book | 1,675 | −9.43% | −0.0081 | −0.0079 | −0.0002 |
+| E0 | best-of-book | 2,208 | −4.54% | +0.0078 | +0.0068 | +0.0010 |
+| E2 (League One) | best-of-book | 2,738 | −6.54% | +0.0067 | +0.0057 | +0.0010 |
+| SC2 (Scottish L1) | best-of-book | 556 | −2.65% | +0.0146 | +0.0067 | **+0.0078** |
+| SC3 (Scottish L2) | best-of-book | 500 | +3.12% | +0.0135 | +0.0067 | **+0.0068** |
+
+The `Random CLV` column is the reason this table is trustworthy. Best-of-book
+entry prices beat a single book's close roughly 60% of the time **with no model
+at all** — you are comparing the best of ~17 prices against one. A strategy
+reporting "+0.007 mean CLV, 64% positive" on that basis has demonstrated
+nothing. `backtest.clv.clv_skill` subtracts that free lunch.
+
+What survives the control: in the two thinnest markets tested, the model shows
+genuine selection skill (SC2 t = 5.1, SC3 t = 4.1 — significant even after
+correcting for the 14 division/entry-rule combinations tried). That is the
+project's "thin markets are less efficient" thesis showing up in data. But the
+skill is worth ~0.7 percentage points of implied probability, and the margin
+plus commission is worth more, so **it does not convert into profit**: SC3's
++3.12% ROI is 0.5 standard errors from zero (SE 6.7%) and is noise, not a
+finding. Do not read that number as an edge.
+
+Honest summary: the fitter works, the backtest is sound, and the strategy is
+not yet profitable. The measurable signal is in lower-tier markets and in line
+shopping — not in the Premier League.
 
 ## Design notes
 
@@ -131,6 +185,13 @@ equity PEAD both need those feeds.
   when the spread would eat too much of the edge.
 - **Fail-safe risk.** The circuit breaker latches once tripped — a recovering
   equity curve cannot silently re-enable trading; a human must `reset()`.
+- **No look-ahead by construction.** The walk-forward loop derives its training
+  window from the prediction date and cuts strictly at `date < d`, so a fit
+  cannot see a result it is about to bet on. A test tampers with a future
+  matchday's scores and asserts every earlier bet is unchanged.
+- **Measure against the right null.** A metric that a random strategy also
+  earns is not evidence. `backtest.clv` makes that baseline a first-class
+  object rather than something a reader is trusted to remember.
 
 ## Scope & disclaimer
 
@@ -142,4 +203,4 @@ venue you connect to.
 
 ## Requirements
 
-Python 3.11+, `numpy`, `duckdb`, `pandas`; `pytest` for the test suite.
+Python 3.11+, `numpy`, `duckdb`, `pandas`, `scipy`; `pytest` for the test suite.

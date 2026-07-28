@@ -7,12 +7,16 @@ operations/risk. Each layer is a small, independently testable module.
 
 from __future__ import annotations
 
+from .backtest.clv import clv_baseline, clv_skill
+from .backtest.metrics import BacktestMetrics, max_drawdown, sharpe_ratio
+from .backtest.walk_forward import Bet, BacktestResult, walk_forward_backtest
 from .economics.friction import FrictionModel, should_use_maker
 from .execution.oms import OMS, PaperBroker
 from .execution.order_manager import DynamicOrderManager, ExecutionResult
 from .risk.circuit_breaker import RiskCircuitBreaker
 from .strategies.base import Param, Signal, Strategy
 from .strategies.dixon_coles import DixonColesModel, TeamRating, expected_value
+from .strategies.dixon_coles_fit import FitResult, fit_dixon_coles, time_decay_weights
 from .strategies.pead import PostEarningsDriftStrategy
 from .strategies.prob_arbitrage import Outcome, find_boundary_arbitrage
 
@@ -32,6 +36,17 @@ __all__ = [
     "DixonColesModel",
     "TeamRating",
     "expected_value",
+    "FitResult",
+    "fit_dixon_coles",
+    "time_decay_weights",
+    "walk_forward_backtest",
+    "BacktestResult",
+    "BacktestMetrics",
+    "Bet",
+    "sharpe_ratio",
+    "max_drawdown",
+    "clv_baseline",
+    "clv_skill",
     "PostEarningsDriftStrategy",
     "Outcome",
     "find_boundary_arbitrage",

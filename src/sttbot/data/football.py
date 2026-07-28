@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import duckdb
 
-from .datasets import fetch
+from .datasets import fetch, fetch_football_data_uk
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,12 @@ class Match:
     max_home: float | None = None
     max_draw: float | None = None
     max_away: float | None = None
+    # Closing 1X2 odds, populated only by the football-data.co.uk loader. The
+    # bulk football_matches dataset keeps a single odds snapshot per match, so
+    # these stay None there and CLV cannot be computed from it.
+    close_home: float | None = None
+    close_draw: float | None = None
+    close_away: float | None = None
 
     @property
     def result(self) -> str:
@@ -38,6 +44,10 @@ class Match:
         if self.home_goals < self.away_goals:
             return "A"
         return "D"
+
+    @property
+    def has_closing_odds(self) -> bool:
+        return None not in (self.close_home, self.close_draw, self.close_away)
 
 
 _SELECT = """
@@ -87,6 +97,127 @@ def load_matches(
     finally:
         con.close()
     return [Match(*row) for row in rows]
+
+
+# --- football-data.co.uk (carries closing odds) -----------------------------
+#
+# Entry line = Bet365 pre-match (B365H/D/A), best-of-book pre-match = MaxH/D/A.
+# Closing line prefers Pinnacle (PSCH/PSCD/PSCA) because it is the sharpest
+# widely-published close; Bet365's close is the fallback when Pinnacle is
+# absent. Column availability varies by season, so every odds column is read
+# through COALESCE against a NULL literal via try-select below.
+
+# Read Date as text: files before ~2018 use DD/MM/YY and later ones DD/MM/YYYY,
+# and DuckDB's auto-detection silently misreads the two-digit form (14/08/10 in
+# the 2010/11 file came back as 2001-01-11). Walk-forward ordering depends on
+# these dates, so parse both formats explicitly instead.
+_FDUK_READ = (
+    "read_csv_auto(?, header=true, sample_size=-1, ignore_errors=true, "
+    "types={'Date': 'VARCHAR'})"
+)
+
+# Pick the format by string length rather than trying one then the other:
+# '%d/%m/%Y' happily parses "14/08/10" as the year 10 AD, so an ordered
+# COALESCE silently produces dates two millennia off.
+_FDUK_DATE = (
+    'CAST(CASE WHEN length("Date") = 10 '
+    "THEN try_strptime(\"Date\", '%d/%m/%Y') "
+    "ELSE try_strptime(\"Date\", '%d/%m/%y') END AS DATE)"
+)
+
+# Logical field -> candidate source columns, in preference order. Seasons differ
+# in which books they carry, so each field resolves against whatever the file
+# actually has and falls back to NULL when none are present.
+_FDUK_ODDS_COLUMNS: dict[str, tuple[str, ...]] = {
+    "odds_home": ("B365H", "AvgH"),
+    "odds_draw": ("B365D", "AvgD"),
+    "odds_away": ("B365A", "AvgA"),
+    "max_home": ("MaxH", "B365H"),
+    "max_draw": ("MaxD", "B365D"),
+    "max_away": ("MaxA", "B365A"),
+    "close_home": ("PSCH", "B365CH", "AvgCH"),
+    "close_draw": ("PSCD", "B365CD", "AvgCD"),
+    "close_away": ("PSCA", "B365CA", "AvgCA"),
+}
+
+
+def _fduk_expression(field: str, present: set[str]) -> str:
+    """COALESCE over whichever candidate columns this file actually has.
+
+    Returns a bare expression with no alias, so it can be reused verbatim in a
+    WHERE clause.
+    """
+    candidates = [f'"{c}"' for c in _FDUK_ODDS_COLUMNS[field] if c in present]
+    if not candidates:
+        return "CAST(NULL AS DOUBLE)"
+    if len(candidates) == 1:
+        return candidates[0]
+    return f"COALESCE({', '.join(candidates)})"
+
+
+def _fduk_query(con: duckdb.DuckDBPyConnection, path: str, require_closing: bool) -> str:
+    present = {
+        row[0]
+        for row in con.execute(f"DESCRIBE SELECT * FROM {_FDUK_READ}", [path]).fetchall()
+    }
+    projections = ",\n    ".join(
+        f"{_fduk_expression(field, present)} AS {field}"
+        for field in _FDUK_ODDS_COLUMNS
+    )
+    conditions = [
+        '"FTHG" IS NOT NULL',
+        '"FTAG" IS NOT NULL',
+        '"HomeTeam" IS NOT NULL',
+        f"{_FDUK_DATE} IS NOT NULL",
+    ]
+    if require_closing:
+        conditions += [
+            f"{_fduk_expression(field, present)} > 1"
+            for field in ("close_home", "close_draw", "close_away")
+        ]
+    return f"""
+SELECT
+    {_FDUK_DATE} AS date,
+    "Div" AS division,
+    "HomeTeam" AS home,
+    "AwayTeam" AS away,
+    CAST("FTHG" AS INTEGER) AS home_goals,
+    CAST("FTAG" AS INTEGER) AS away_goals,
+    {projections}
+FROM {_FDUK_READ}
+WHERE {' AND '.join(conditions)}
+ORDER BY date
+"""
+
+
+def load_football_data_uk(
+    seasons: list[str],
+    division: str,
+    *,
+    require_closing: bool = False,
+    paths: list[str] | None = None,
+) -> list[Match]:
+    """Load football-data.co.uk matches for ``seasons`` in one ``division``.
+
+    Seasons are four-digit codes (``'2324'``). Unlike :func:`load_matches`,
+    these rows carry a genuine closing line, which is what CLV needs; pass
+    ``require_closing=True`` to keep only rows that have one. Closing columns
+    only exist from season 2019/20 onward, so earlier seasons yield rows with
+    ``close_*`` set to None.
+    """
+    if paths is None:
+        paths = [str(fetch_football_data_uk(s, division)) for s in seasons]
+
+    matches: list[Match] = []
+    con = duckdb.connect()
+    try:
+        for path in paths:
+            query = _fduk_query(con, path, require_closing)
+            matches.extend(Match(*row) for row in con.execute(query, [path]).fetchall())
+    finally:
+        con.close()
+    matches.sort(key=lambda m: m.date)
+    return matches
 
 
 def overround(home: float, draw: float, away: float) -> float:

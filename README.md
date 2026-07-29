@@ -39,6 +39,9 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
 | `backtest.clv` | Closing-line-value **control**: what CLV a random selection earns on the same matches, so mechanical CLV is not mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
+| `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
+| `strategies.amm` | Constant-product AMM mechanics: price impact, the no-arb fee band, profit-maximising CEX-DEX arbitrage sizing, impermanent loss. |
+| `strategies.token_screen` | Pre-trade rug/honeypot screening for low-cap tokens, plus exit sizing against real pool depth. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
 | `execution.order_manager` | `DynamicOrderManager` — pre-trade slippage cap + Time-To-Live cancellation. |
@@ -174,6 +177,44 @@ finding. Do not read that number as an edge.
 Honest summary: the fitter works, the backtest is sound, and the strategy is
 not yet profitable. The measurable signal is in lower-tier markets and in line
 shopping — not in the Premier League.
+
+## Crypto, meme coins, and prediction markets
+
+`python examples/crypto_and_prediction.py` demonstrates all three. Each module
+targets a specific way naive implementations lose money.
+
+**Fees that aren't flat.** Kalshi charges `0.07 · P · (1−P)` per contract —
+1.75c at a 50c contract, 0.33c at 5c. An identical 1c gross edge is therefore
+*unprofitable mid-book and profitable at the tail*. Modelling this as a flat
+percentage gets the sign of the trade wrong. `venues.prediction` also refuses to
+pair two markets unless they're explicitly declared `equivalent=True`: a
+same-headline market with a different resolution source turns a "risk-free"
+hedge into an unhedged bet on a technicality.
+
+**Arbitrage sized to the wrong target.** The intuitive AMM arb trades until the
+pool price equals the external price. That overshoots — the marginal unit earns
+nothing while still paying fees. `optimal_arbitrage` maximises profit directly:
+
+```
+dy* = (√(p_ext · x · y · γ) − y) / γ
+```
+
+Tests verify the closed form against a brute-force search over ±50% of the
+optimum, and confirm it beats price-equality sizing. `no_arb_band` gives the
+range where fees make *any* size unprofitable — divergence inside it is not an
+opportunity, however large it looks against mid.
+
+**Position sizing that ignores the exit.** For thin tokens the dominant loss
+mode isn't a bad entry, it's being unable to sell. `token_screen` covers the rug
+and honeypot heuristics (LP lock, holder concentration, mint/freeze authority,
+sell-tax asymmetry, simulated sell), and `position_limit` takes the *smaller* of
+your risk budget and what the pool can actually absorb on exit. Missing data
+counts as a failure, not a pass — absence of evidence isn't evidence of safety
+for an asset like this.
+
+These are heuristics over self-reported metadata, not a safety guarantee. A
+token can pass every check and still go to zero; most will. Nothing here
+estimates whether a token goes *up*.
 
 ## Design notes
 

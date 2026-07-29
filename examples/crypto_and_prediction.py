@@ -113,21 +113,31 @@ def token_screening() -> None:
     candidates = [
         TokenMetadata(
             symbol="SOLID", liquidity_usd=250_000, lp_locked_fraction=1.0,
-            top_holder_fraction=0.04, holder_count=8_000, age_hours=2_000,
+            top_holder_fraction=0.04, top10_holder_fraction=0.16,
+            sniper_bundled_fraction=0.02, holder_count=8_000, age_hours=2_000,
             buy_tax=0.0, sell_tax=0.0, can_mint=False, can_freeze=False,
             ownership_renounced=True, sell_simulation_passed=True,
         ),
         TokenMetadata(
             symbol="RUGME", liquidity_usd=8_000, lp_locked_fraction=0.0,
-            top_holder_fraction=0.72, holder_count=41, age_hours=3,
+            top_holder_fraction=0.72, top10_holder_fraction=0.91,
+            sniper_bundled_fraction=0.60, holder_count=41, age_hours=3,
             buy_tax=0.0, sell_tax=0.0, can_mint=True, can_freeze=True,
             ownership_renounced=False, sell_simulation_passed=True,
         ),
         TokenMetadata(
             symbol="TRAP", liquidity_usd=120_000, lp_locked_fraction=1.0,
-            top_holder_fraction=0.05, holder_count=3_000, age_hours=300,
+            top_holder_fraction=0.05, top10_holder_fraction=0.12,
+            sniper_bundled_fraction=0.04, holder_count=3_000, age_hours=300,
             buy_tax=0.01, sell_tax=0.09, can_mint=False, can_freeze=False,
             ownership_renounced=True, sell_simulation_passed=False,
+        ),
+        TokenMetadata(
+            symbol="CARTEL", liquidity_usd=180_000, lp_locked_fraction=1.0,
+            top_holder_fraction=0.05, top10_holder_fraction=0.50,
+            sniper_bundled_fraction=0.05, holder_count=2_200, age_hours=400,
+            buy_tax=0.0, sell_tax=0.0, can_mint=False, can_freeze=False,
+            ownership_renounced=True, sell_simulation_passed=True,
         ),
         TokenMetadata(symbol="NODATA", liquidity_usd=500_000),
     ]

@@ -17,6 +17,8 @@ def clean(**overrides) -> TokenMetadata:
         liquidity_usd=250_000.0,
         lp_locked_fraction=1.0,
         top_holder_fraction=0.05,
+        top10_holder_fraction=0.18,
+        sniper_bundled_fraction=0.03,
         holder_count=5_000,
         age_hours=720.0,
         buy_tax=0.0,
@@ -42,6 +44,8 @@ def test_clean_token_passes():
         ("liquidity_usd", 1_000.0),
         ("lp_locked_fraction", 0.10),
         ("top_holder_fraction", 0.60),
+        ("top10_holder_fraction", 0.55),
+        ("sniper_bundled_fraction", 0.40),
         ("holder_count", 12),
         ("age_hours", 0.5),
         ("sell_tax", 0.35),
@@ -79,6 +83,28 @@ def test_zero_is_a_value_not_a_missing_field(field, value):
     result = screen(clean(**{field: value}))
     assert result.passed, result.summary()
     assert field not in result.unknowns
+
+
+def test_distributed_whale_supply_caught_by_top10_not_top1():
+    """Ten coordinated wallets at 5% each pass a top-1 check comfortably.
+
+    This is the gap the single-holder measure leaves: 50% of supply positioned
+    to exit together, with no individual wallet looking unusual.
+    """
+    token = clean(top_holder_fraction=0.05, top10_holder_fraction=0.50)
+    result = screen(token)
+    assert not result.passed
+    assert any("top 10 holders" in f for f in result.failures)
+    # The single-holder check alone sees nothing wrong.
+    assert not any("top holder owns" in f for f in result.failures)
+
+
+def test_sniped_launch_blocks_despite_clean_distribution():
+    token = clean(top_holder_fraction=0.02, top10_holder_fraction=0.10,
+                  sniper_bundled_fraction=0.45)
+    result = screen(token)
+    assert not result.passed
+    assert any("snipers/bundled" in f for f in result.failures)
 
 
 def test_unknown_data_blocks_but_is_reported_separately():

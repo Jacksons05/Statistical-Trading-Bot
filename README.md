@@ -212,6 +212,31 @@ your risk budget and what the pool can actually absorb on exit. Missing data
 counts as a failure, not a pass — absence of evidence isn't evidence of safety
 for an asset like this.
 
+The checks are research-led rather than invented. The literature keys on
+**top-10 concentration** (~30%), not just the largest holder — ten coordinated
+wallets at 5% each carry the same exit risk as one whale while passing a
+single-holder check comfortably — and on **sniper/bundled wallets** holding the
+launch float. Both are screened, with a test for the distributed-whale case
+that a top-1 measure alone misses.
+
+### Why the defaults are strict
+
+Published base rates, 2025–2026:
+
+| Metric | Figure |
+| --- | --- |
+| Meme coins that die or lose meaningful volume | ~97% (Binance Research) |
+| pump.fun tokens whose last trade is their launch day | ~69% |
+| pump.fun graduation to a DEX listing | <2% through 2025, ~0.26% by mid-2026 |
+| Average rug pull | ~$510k, >$2.8bn total in 2025 (Chainalysis) |
+
+Against a base rate that skewed, essentially all the achievable edge is in
+**avoidance, not selection**. A screen that rejects almost everything is working
+as designed: a false reject costs you a missed winner, a false accept costs the
+whole position. Loosening thresholds to surface more candidates is usually a
+mistake. The ~69% same-day death rate is also what justifies the 24h minimum
+age — it removes most of the distribution at almost no opportunity cost.
+
 These are heuristics over self-reported metadata, not a safety guarantee. A
 token can pass every check and still go to zero; most will. Nothing here
 estimates whether a token goes *up*.

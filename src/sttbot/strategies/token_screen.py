@@ -16,6 +16,27 @@ These are heuristics over self-reported on-chain metadata. They filter obvious
 traps; they are not a safety guarantee. A token can pass every check here and
 still go to zero — indeed most will. Nothing in this module estimates whether a
 token will go *up*.
+
+Base rates (published figures, 2025-2026) — why the defaults are strict:
+
+* ~97% of meme coins die or lose meaningful volume, average lifespan ~1 year
+  (Binance Research).
+* ~69% of pump.fun tokens record their last trade on the *same day* they
+  launch, so a 24h minimum age filters most of the distribution at almost no
+  opportunity cost.
+* Graduation to a DEX listing ran below 2% through 2025, falling to ~0.26% by
+  mid-2026.
+* Rug pulls averaged ~$510k each, >$2.8bn total across 2025 (Chainalysis).
+
+The strategic consequence: against a base rate that skewed, nearly all the
+achievable edge is in *avoidance* rather than selection. A screen that rejects
+almost everything is working as intended — the cost of a false reject (a missed
+winner) is far smaller than a false accept (a total loss). Loosening thresholds
+to surface more candidates is usually a mistake.
+
+Threshold provenance: the top-10 concentration limit reflects the ~30% level
+the rug-pull detection literature converges on; the LP-lock, single-holder and
+sniper/bundled-wallet checks follow the same body of work.
 """
 
 from __future__ import annotations
@@ -40,6 +61,15 @@ class TokenMetadata:
     lp_locked_fraction: float | None = None
     # Largest non-pool, non-burn holder's share of supply.
     top_holder_fraction: float | None = None
+    # Combined share of the top 10 holders. Distinct from the single-holder
+    # measure and the one the rug-pull literature actually keys on: supply
+    # split across ten coordinated wallets is the same exit risk as one whale,
+    # and passes a top-1 check comfortably.
+    top10_holder_fraction: float | None = None
+    # Share acquired by snipers/bundled wallets in the launch block(s). High
+    # values mean the float is held by actors positioned to exit into the first
+    # real bid, regardless of how the supply looks spread afterwards.
+    sniper_bundled_fraction: float | None = None
     holder_count: int | None = None
     age_hours: float | None = None
     # Transfer taxes, as fractions. A large asymmetry is the classic honeypot.
@@ -60,7 +90,13 @@ class ScreenThresholds:
     min_liquidity_usd: float = 25_000.0
     min_lp_locked_fraction: float = 0.90
     max_top_holder_fraction: float = 0.15
+    # 30% across the top 10 is the threshold the rug-pull literature converges
+    # on as the point where coordinated exit becomes the dominant risk.
+    max_top10_holder_fraction: float = 0.30
+    max_sniper_bundled_fraction: float = 0.15
     min_holder_count: int = 200
+    # ~69% of pump.fun tokens never trade again after their launch day, so a
+    # minimum age filters the bulk of the distribution at essentially no cost.
     min_age_hours: float = 24.0
     max_sell_tax: float = 0.10
     max_tax_asymmetry: float = 0.05  # sell_tax - buy_tax
@@ -128,6 +164,20 @@ def screen(
         lambda v: v <= limits.max_top_holder_fraction,
         lambda v: f"top holder owns {v:.0%} "
         f"(max {limits.max_top_holder_fraction:.0%}) — single-wallet dump risk",
+    )
+    check(
+        "top10_holder_fraction",
+        token.top10_holder_fraction,
+        lambda v: v <= limits.max_top10_holder_fraction,
+        lambda v: f"top 10 holders own {v:.0%} "
+        f"(max {limits.max_top10_holder_fraction:.0%}) — coordinated exit risk",
+    )
+    check(
+        "sniper_bundled_fraction",
+        token.sniper_bundled_fraction,
+        lambda v: v <= limits.max_sniper_bundled_fraction,
+        lambda v: f"snipers/bundled wallets hold {v:.0%} "
+        f"(max {limits.max_sniper_bundled_fraction:.0%}) — float is pre-positioned to exit",
     )
     check(
         "holder_count",

@@ -8,6 +8,7 @@ operations/risk. Each layer is a small, independently testable module.
 from __future__ import annotations
 
 from .backtest.clv import clv_baseline, clv_skill
+from .backtest.mm_simulator import Fill, SimulationResult, simulate
 from .backtest.metrics import BacktestMetrics, max_drawdown, sharpe_ratio
 from .backtest.walk_forward import Bet, BacktestResult, walk_forward_backtest
 from .economics.friction import FrictionModel, should_use_maker
@@ -22,6 +23,15 @@ from .strategies.amm import (
     optimal_arbitrage,
 )
 from .strategies.base import Param, Signal, Strategy
+from .strategies.market_making import (
+    MarketMaker,
+    Quote,
+    QuoteParams,
+    breakeven_spread,
+    contract_variance,
+    is_tradeable,
+    untradeable_band,
+)
 from .strategies.dixon_coles import DixonColesModel, TeamRating, expected_value
 from .strategies.dixon_coles_fit import FitResult, fit_dixon_coles, time_decay_weights
 from .strategies.pead import PostEarningsDriftStrategy
@@ -94,5 +104,15 @@ __all__ = [
     "find_cross_venue_arb",
     "kelly_fraction",
     "implied_from_book",
+    "MarketMaker",
+    "QuoteParams",
+    "Quote",
+    "breakeven_spread",
+    "contract_variance",
+    "is_tradeable",
+    "untradeable_band",
+    "simulate",
+    "SimulationResult",
+    "Fill",
     "__version__",
 ]

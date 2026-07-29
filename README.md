@@ -40,6 +40,8 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `backtest.clv` | Closing-line-value **control**: what CLV a random selection earns on the same matches, so mechanical CLV is not mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
 | `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
+| `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
+| `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
 | `strategies.amm` | Constant-product AMM mechanics: price impact, the no-arb fee band, profit-maximising CEX-DEX arbitrage sizing, impermanent loss. |
 | `strategies.token_screen` | Pre-trade rug/honeypot screening for low-cap tokens, plus exit sizing against real pool depth. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
@@ -240,6 +242,57 @@ age — it removes most of the distribution at almost no opportunity cost.
 These are heuristics over self-reported metadata, not a safety guarantee. A
 token can pass every check and still go to zero; most will. Nothing here
 estimates whether a token goes *up*.
+
+## Scalping prediction markets
+
+`python examples/scalp_prediction_markets.py`. The edge is liquidity
+provision, not speed — which is deliberate: scalping liquid majors would be the
+head-to-head latency competition this project exists to avoid.
+
+**Fees decide where you can quote at all.** Kalshi's quadratic fee is paid twice
+on a round trip, so the breakeven spread is 3.50c at a 50c contract and 0.67c
+at 5c. `untradeable_band` turns that into the actionable number:
+
+| Market spread | Blocked region |
+| --- | --- |
+| 1c | 0.08–0.92 — **84% of the book** |
+| 2c | 0.18–0.82 — 64% of the book |
+| 4c | none |
+
+So on Kalshi you scalp the tails, not the coin flips. Polymarket's zero fee
+removes this constraint entirely, which makes it the more natural venue for
+mid-book quoting.
+
+**Inventory skew has to be scaled to the spread.** Quotes shift against
+inventory (Avellaneda-Stoikov) using `p(1-p)` as the risk scale, tapering to
+zero at expiry. The scale is easy to get wrong: at `risk_aversion=1.0` the shift
+is 25c at full inventory against a ~1c spread, and the maker buys back its own
+position far above fair value. Measured on identical flow:
+
+| `risk_aversion` | Skew at full inventory | Net P&L |
+| --- | --- | --- |
+| 0.01 | 0.25c | +2.31 |
+| 0.05 (default) | 1.25c | +2.01 |
+| 0.25 | 6.25c | +0.52 |
+| 1.00 | 25.0c | **−5.05** |
+
+**Adverse selection is the real cost, and it's measured, not assumed.** A
+simulator that fills you at your quote against an unreactive path reports a
+profit almost regardless of strategy. `mm_simulator` marks out every fill —
+price N steps later versus fill price, signed by direction — so being picked off
+shows up explicitly, and before the P&L does.
+
+Two properties the tests pin, both counterintuitive:
+
+- **Quoting around the last mid loses whenever the price swings wider than your
+  spread.** With ±3c oscillation and a 0.5c half-spread, the maker sells at
+  0.475 while fair value is 0.50, every time. A maker needs a fair-value
+  estimate better than "the last mid".
+- **Slow drift never fills a re-quoting maker** — the quote re-centres and
+  outruns it. Adverse selection comes from jumps that outpace re-quoting.
+
+Fills assume queue priority and no partial fills, so all of this is an **upper
+bound**. Real quoting is worse.
 
 ## Design notes
 

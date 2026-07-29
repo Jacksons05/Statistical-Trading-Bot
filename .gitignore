@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Testing / tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Project data artifacts
+*.duckdb
+*.parquet
+data/*.db
+mlruns/
+.env
+
+# Downloaded datasets (fetched on demand into the cache, never committed)
+.cache/
+data/cache/
+*.csv.gz
+football_matches.csv

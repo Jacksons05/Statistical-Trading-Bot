@@ -568,10 +568,19 @@ Peak distribution under each defence, same 136 pools:
 
 **α is not identified by this sample.** It moves from 0.55 to 1.06 across
 defensible rules, straddling the 1.0 line that separates a finite mean from an
-infinite one — and the whole breadth argument rests on which side it falls.
-Measured peaks also depend on candle aggregation, which is itself evidence the
-extremes are microstructure rather than opportunity. No mean should be quoted
-at all: deleting one dust tick moved it three orders of magnitude.
+infinite one — and the whole breadth argument rests on which side it falls. No
+mean should be quoted at all: deleting one dust tick moved it three orders of
+magnitude.
+
+**The tail is not even stable in time.** Two measurements of the *same cohort*
+40 minutes apart reported best peaks of 1,802× and 152,363×. I first assumed
+that was a candle-aggregation effect and was wrong — re-bucketing 1-minute bars
+into 5-minute bars reproduces the peak exactly, because a maximum of highs is
+invariant to aggregation. The real cause was that ZACK/SOL printed its
+$0.00074 dust tick at 04:24 UTC, after the first measurement had already
+finished at ~04:21. One garbage print, arriving between two runs, moved the
+measured tail by 84×. An α estimated from this data is a snapshot that any
+subsequent dust tick can overturn.
 
 The honest verdict is not "breadth works" or "breadth fails" — it is that a
 616-pool cohort observed for under an hour **cannot resolve the parameter the

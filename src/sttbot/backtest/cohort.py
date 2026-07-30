@@ -135,9 +135,12 @@ def measure_outcomes(
     of the peak, which is a size-neutral way to reject a single unrepeated
     wick without deleting pools for being small.
 
-    Note that measured peaks depend on candle aggregation: finer candles find
-    more extreme highs. That sensitivity is itself evidence that the extremes
-    are microstructure rather than opportunity.
+    The measured tail is also unstable in time, which is the strongest reason
+    to treat any single reading sceptically. Two measurements of one cohort 40
+    minutes apart gave best peaks of 1,802x and 152,363x, because a single
+    $0.00074 tick landed in between. (It is *not* an aggregation effect --
+    re-bucketing minute bars into five-minute bars reproduces the peak exactly,
+    since a maximum of highs is invariant to bucketing.)
     """
     outcomes: list[Outcome] = []
     no_candles: list[str] = []

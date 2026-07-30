@@ -45,6 +45,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
 | `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
 | `strategies.amm` | Constant-product AMM mechanics: price impact, the no-arb fee band, profit-maximising CEX-DEX arbitrage sizing, impermanent loss. |
+| `strategies.breadth` | Many-names/small-size portfolio engine: exact round-trip cost through the pool, depth-capped position sizing, breakeven-multiple and names-to-confidence arithmetic, and an assumption-driven Monte Carlo (explicitly not a backtest). |
 | `strategies.token_screen` | Pre-trade rug/honeypot screening for low-cap tokens, plus exit sizing against real pool depth. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
@@ -468,6 +469,67 @@ This is the same shape as the Polymarket result — 91% of markets there traded
 $0 — and it is the sharpest limit on the whole thin-markets thesis so far.
 Inefficiency is easy to find in places nobody trades. That is not a
 coincidence; it is the reason the inefficiency survives.
+
+## Breadth: many tokens, small size
+
+If per-name capacity is the ceiling, the only remaining shape is width.
+`strategies.breadth` sizes a book across many names at once, and
+`python examples/breadth_portfolio.py` runs the full pipeline — discover,
+screen, size against real pool depth, print intended orders.
+
+The engine separates three things that are usually blurred together:
+
+- **`round_trip_cost` is exact**, simulated through the constant-product pool.
+  Both legs are priced against the *same* pool state, and that choice matters:
+  simulating the exit against the reserves your own entry just moved lets your
+  impact reverse itself, and round-trip cost then *falls* with size (0.598% at
+  $50 down to 0.480% at $5,000 in a $20k pool) — which would tell a
+  capacity-constrained strategy to trade bigger. That reversal is only real if
+  you exit in the same instant, which a held position does not.
+- **`breakeven_multiple` and `names_for_confidence` are arithmetic** on an
+  assumed hit rate. They say what the world must look like.
+- **`simulate` is a Monte Carlo over an assumed payoff tail.** It is *not* a
+  backtest and nothing here is fitted to realised token returns.
+
+The arithmetic is unforgiving. At a 3% survival rate and ~2–4% round-trip cost:
+
+| Quantity | Value |
+| --- | --- |
+| Multiple winners must return to break even | **33.3×** |
+| Concurrent names for a 95% chance of holding one | **99** |
+| A 20-name book misses entirely | 54% of the time |
+
+A live run built a book of **2 positions** — because the DexScreener profile
+feed yields ~30 tokens per refresh and only ~10% clear even a relaxed screen.
+A 2-name book misses entirely 94% of the time. **The binding constraint has
+moved from capacity to discovery throughput.** GeckoTerminal's `new_pools`
+endpoint serves 200 per refresh and is the obvious fix; the profile feed cannot
+sustain this strategy.
+
+Simulated over 12 rounds at three assumed tails, from a $10,000 bankroll:
+
+| Assumed tail | Median | Mean | P(loss) | P(ruin) |
+| --- | --- | --- | --- | --- |
+| Fat (α 0.8) | $88 | $245,859 | 88% | 85% |
+| Medium (α 1.5) | $76 | $190 | 100% | 100% |
+| Thin (α 3.0) | $75 | $76 | 100% | 100% |
+
+That mean-versus-median gap *is* the strategy: it is positive expectancy that
+loses almost every time, and only pays through a tail nobody here has measured.
+The assumed α decides the entire answer, so measuring the realised distribution
+of token returns is the work that would turn this from a structure into a
+strategy.
+
+Execution is not implemented — the example prints intended orders. Real fills
+need a funded wallet, slippage-bounded routing and MEV protection, all of which
+make outcomes worse than modelled.
+
+The screen and the strategy also genuinely disagree, and the example says so:
+`token_screen` defaults to a 24-hour minimum age because ~69% of launches never
+trade past day one, but the only cohort with flow is *under* a day old. Running
+breadth there means lowering that floor deliberately and managing the risk by
+size instead of selection, keeping only the checks size cannot protect you
+from — live mint authority, freeze authority, and top-10 concentration.
 
 ## Design notes
 

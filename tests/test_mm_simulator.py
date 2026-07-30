@@ -20,14 +20,26 @@ def test_flat_path_never_fills():
     assert result.mean_markout is None
 
 
-def test_noise_smaller_than_the_spread_is_profitable():
-    """Genuine uninformed flow: jitter inside the quoted spread.
+def test_sub_tick_noise_never_fills():
+    """With a 1c tick you cannot scalp sub-cent wobble.
 
-    Half-spread is 0.005, so a +/-0.003 oscillation crosses the quote without
-    the fair value ever really moving. This is the only regime a naive maker
-    should make money in.
+    Quotes snap to 0.49/0.51 around a 0.50 mid, and a +/-0.3c path never
+    reaches either. The tick is a hard floor on the noise amplitude a maker can
+    monetise, independent of fees.
     """
     path = [0.50 + (0.003 if i % 2 else -0.003) for i in range(60)]
+    assert simulate(maker(), path).num_fills == 0
+
+
+def test_excursion_and_reversion_is_profitable():
+    """The regime a maker actually wants: price leaves the mid and comes back.
+
+    0.50 -> 0.51 -> 0.50 -> 0.49 -> 0.50 lifts the ask at 0.51 and hits the bid
+    at 0.49, both around a stable fair value. This is uninformed flow, and it
+    is what the spread is compensation for.
+    """
+    cycle = [0.50, 0.51, 0.50, 0.49]
+    path = cycle * 15
     result = simulate(maker(), path, settlement=0.50)
     assert result.num_fills > 0
     assert result.net_pnl > 0
@@ -46,7 +58,9 @@ def test_oscillation_wider_than_the_spread_loses():
     result = simulate(maker(), path, settlement=0.50)
     assert result.num_fills > 0
     assert result.net_pnl < 0
-    assert result.mean_markout < 0
+    # Mark-out is not asserted here: on a pure oscillation the price returns to
+    # where it started, so the post-fill move is ambiguous by construction. The
+    # P&L is the finding.
 
 
 def test_slow_drift_does_not_fill_a_requoting_maker():

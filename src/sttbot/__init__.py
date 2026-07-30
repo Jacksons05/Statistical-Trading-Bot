@@ -46,7 +46,10 @@ from .strategies.token_screen import (
 )
 from .venues.prediction import (
     KALSHI_FEES,
+    POLYMARKET_CATEGORY_RATES,
     POLYMARKET_FEES,
+    POLYMARKET_US_FEES,
+    polymarket_fees,
     CrossVenueArb,
     FeeModel,
     VenueQuote,
@@ -101,6 +104,9 @@ __all__ = [
     "CrossVenueArb",
     "KALSHI_FEES",
     "POLYMARKET_FEES",
+    "POLYMARKET_US_FEES",
+    "POLYMARKET_CATEGORY_RATES",
+    "polymarket_fees",
     "find_cross_venue_arb",
     "kelly_fraction",
     "implied_from_book",

@@ -253,15 +253,41 @@ head-to-head latency competition this project exists to avoid.
 on a round trip, so the breakeven spread is 3.50c at a 50c contract and 0.67c
 at 5c. `untradeable_band` turns that into the actionable number:
 
-| Market spread | Blocked region |
+| Market spread | Blocked region (Kalshi) |
 | --- | --- |
 | 1c | 0.08–0.92 — **84% of the book** |
 | 2c | 0.18–0.82 — 64% of the book |
 | 4c | none |
 
-So on Kalshi you scalp the tails, not the coin flips. Polymarket's zero fee
-removes this constraint entirely, which makes it the more natural venue for
-mid-book quoting.
+So on Kalshi you scalp the tails, not the coin flips.
+
+### Polymarket: makers pay nothing
+
+`python examples/scalp_polymarket.py`. Polymarket's 2026 schedule charges
+**takers only**, using the same quadratic shape at a category-dependent rate
+(0.03 sports, 0.04 politics/finance/tech, 0.05 economics/culture/weather, 0.07
+crypto; geopolitical and world-events markets are fee-free). Part of it is
+rebated to makers. A market maker is passive on *both* legs, so it pays zero —
+and with a rebate is paid to quote:
+
+| Maker round-trip cost | Kalshi | Polymarket | Polymarket + rebate |
+| --- | --- | --- | --- |
+| at 0.05 | 0.67c | 0.00c | −0.12c |
+| at 0.50 | 3.50c | 0.00c | −0.62c |
+
+At a 2c market spread Kalshi blocks 64% of the book; Polymarket blocks **none**.
+Use `polymarket_fees(category, maker_rebate=...)`; an unknown category falls
+back to the `other` rate rather than silently assuming free trading.
+
+This also fixed a real bug: `breakeven_spread` was pricing both legs at the
+*taker* rate. On Kalshi maker and taker are equal so it made no difference; on
+Polymarket it was the gap between paying 5% and earning a rebate.
+
+**Then the tick becomes the binding constraint.** With fees gone, the 1c grid
+is the floor: quotes snap to it (bid down, ask up, so snapping never tightens
+the intended spread), the tightest round trip earns 1–2c, and sub-cent noise is
+unmonetisable — a ±0.3c wobble produces **zero fills**, because the quote sits
+at 0.49/0.51 and the price never reaches it.
 
 **Inventory skew has to be scaled to the spread.** Quotes shift against
 inventory (Avellaneda-Stoikov) using `p(1-p)` as the risk scale, tapering to

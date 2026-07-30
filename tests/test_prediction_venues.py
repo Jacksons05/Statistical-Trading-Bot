@@ -3,6 +3,8 @@ import pytest
 from sttbot.venues.prediction import (
     KALSHI_FEES,
     POLYMARKET_FEES,
+    POLYMARKET_US_FEES,
+    polymarket_fees,
     FeeModel,
     VenueQuote,
     find_cross_venue_arb,
@@ -50,6 +52,91 @@ def test_proportional_fee_model_distinguishes_maker_and_taker():
 
 def test_polymarket_fees_are_zero():
     assert POLYMARKET_FEES.cost(0.5, contracts=1000) == 0.0
+
+
+# --- Polymarket maker/taker split ------------------------------------------
+
+
+def test_kalshi_charges_makers_and_takers_alike():
+    # Kalshi's fee applies to every execution, so a maker pays on both legs.
+    assert KALSHI_FEES.cost(0.5) == pytest.approx(KALSHI_FEES.cost(0.5, maker=True))
+    assert not KALSHI_FEES.pays_makers
+
+
+def test_polymarket_charges_takers_only():
+    politics = polymarket_fees("politics")
+    assert politics.cost(0.50) > 0                      # taker pays
+    assert politics.cost(0.50, maker=True) == 0.0       # maker does not
+
+
+def test_polymarket_taker_rate_varies_by_category():
+    crypto = polymarket_fees("crypto").cost(0.50)
+    sports = polymarket_fees("sports").cost(0.50)
+    assert crypto > sports > 0
+    # Documented figures: 1.75c and 0.75c per contract at a 50c market.
+    assert crypto == pytest.approx(0.0175)
+    assert sports == pytest.approx(0.0075)
+
+
+def test_fee_free_categories():
+    for cat in ("geopolitical", "world"):
+        fees = polymarket_fees(cat)
+        assert fees.cost(0.50) == 0.0
+        assert fees.cost(0.50, maker=True) == 0.0
+
+
+def test_unknown_category_falls_back_to_other_not_free():
+    """An unrecognised category must not silently become fee-free."""
+    unknown = polymarket_fees("not-a-real-category")
+    assert unknown.cost(0.50) == pytest.approx(polymarket_fees("other").cost(0.50))
+    assert unknown.cost(0.50) > 0
+
+
+def test_category_lookup_is_case_insensitive():
+    assert polymarket_fees("CRYPTO").cost(0.5) == polymarket_fees("crypto").cost(0.5)
+
+
+def test_maker_rebate_is_negative_cost():
+    rebate = polymarket_fees("politics", maker_rebate=0.0125)
+    cost = rebate.cost(0.50, maker=True)
+    assert cost < 0                       # income, not expense
+    assert rebate.pays_makers
+    assert cost == pytest.approx(-0.0125 * 0.25)
+
+
+def test_maker_rebate_must_be_given_as_positive():
+    with pytest.raises(ValueError):
+        polymarket_fees("politics", maker_rebate=-0.01)
+
+
+def test_us_schedule_pays_makers():
+    assert POLYMARKET_US_FEES.cost(0.50) > 0
+    assert POLYMARKET_US_FEES.cost(0.50, maker=True) < 0
+    assert POLYMARKET_US_FEES.pays_makers
+
+
+def test_quadratic_fee_is_symmetric_and_vanishes_at_the_tails():
+    fees = polymarket_fees("crypto")
+    assert fees.cost(0.10) == pytest.approx(fees.cost(0.90))
+    assert fees.cost(0.01) < fees.cost(0.25) < fees.cost(0.50)
+
+
+def test_fee_cap_limits_per_contract_charge():
+    capped = FeeModel(quadratic_taker=0.07, max_fee_per_contract=0.01)
+    assert capped.cost(0.50) == pytest.approx(0.01)          # would be 0.0175
+    assert capped.cost(0.50, contracts=100) == pytest.approx(1.0)
+    assert capped.cost(0.02) < 0.01                          # below the cap, uncapped
+
+
+def test_fee_cap_applies_to_rebates_too():
+    capped = FeeModel(quadratic_maker=-0.07, max_fee_per_contract=0.005)
+    assert capped.cost(0.50, maker=True) == pytest.approx(-0.005)
+
+
+def test_proportional_and_quadratic_terms_sum():
+    both = FeeModel(taker=0.01, quadratic_taker=0.04)
+    expected = 0.04 * 0.5 * 0.5 + 0.01 * 0.5
+    assert both.cost(0.50) == pytest.approx(expected)
 
 
 def test_fee_validates_price():

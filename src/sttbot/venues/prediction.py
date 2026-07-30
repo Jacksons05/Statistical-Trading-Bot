@@ -28,36 +28,100 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class FeeModel:
-    """Per-venue trading cost.
+    """Per-venue trading cost, separating maker from taker.
 
-    ``maker``/``taker`` are proportional to notional. ``kalshi_style`` switches
-    to Kalshi's published quadratic form, which dominates the proportional
-    terms when set.
+    Two cost shapes are supported and summed:
+
+    * **Quadratic** — ``rate * contracts * p * (1-p)``, the form both Kalshi and
+      Polymarket use. Maximal at a 50c contract, vanishing at the extremes.
+    * **Proportional** — ``rate * contracts * price``, a plain percentage.
+
+    The maker/taker split matters enormously for market making, because a maker
+    is passive on *both* legs of a round trip. ``quadratic_maker`` may be
+    negative, representing a rebate — income rather than cost — which is how
+    Polymarket pays liquidity providers out of taker fees.
+
+    ``max_fee_per_contract`` caps the per-contract charge, as Polymarket does.
     """
 
     taker: float = 0.0
     maker: float = 0.0
-    kalshi_style: bool = False
-    kalshi_rate: float = 0.07
+    quadratic_taker: float = 0.0
+    quadratic_maker: float = 0.0
+    max_fee_per_contract: float | None = None
 
     def cost(self, price: float, contracts: float = 1.0, *, maker: bool = False) -> float:
-        """Fee in numeraire for trading ``contracts`` at ``price``."""
+        """Fee in numeraire. Negative means a rebate is earned."""
         if not 0.0 <= price <= 1.0:
             raise ValueError("price must be a probability in [0, 1]")
         if contracts < 0:
             raise ValueError("contracts must be non-negative")
-        if self.kalshi_style:
-            # fee = rate * C * P * (1 - P): maximal at P=0.50, zero at the ends.
-            return self.kalshi_rate * contracts * price * (1.0 - price)
-        rate = self.maker if maker else self.taker
-        return rate * contracts * price
+        quadratic = self.quadratic_maker if maker else self.quadratic_taker
+        proportional = self.maker if maker else self.taker
+        fee = (
+            quadratic * contracts * price * (1.0 - price)
+            + proportional * contracts * price
+        )
+        if self.max_fee_per_contract is not None:
+            cap = self.max_fee_per_contract * contracts
+            fee = min(fee, cap) if fee >= 0 else max(fee, -cap)
+        return fee
+
+    @property
+    def pays_makers(self) -> bool:
+        """True when passive fills earn a rebate rather than costing anything."""
+        return self.quadratic_maker < 0 or self.maker < 0
 
 
-# Published venue fee schedules. Polymarket has charged 0 on trades, taking its
-# economics elsewhere; Kalshi's quadratic is the one that actually reshapes
-# which trades are viable.
-KALSHI_FEES = FeeModel(kalshi_style=True, kalshi_rate=0.07)
-POLYMARKET_FEES = FeeModel(taker=0.0, maker=0.0)
+# --- published venue fee schedules -----------------------------------------
+#
+# Kalshi charges the same quadratic on every execution, maker or taker, so a
+# market maker pays it on both legs of a round trip.
+KALSHI_FEES = FeeModel(quadratic_taker=0.07, quadratic_maker=0.07)
+
+# Polymarket charges takers only. Its 2026 schedule uses the same quadratic
+# shape with a category-dependent rate, and redistributes part of it to makers
+# as a rebate. Some categories (geopolitical / world events) remain fee-free.
+#
+# POLYMARKET_FEES stays zero-on-both-sides: it models the fee-free categories
+# and is the conservative default for a maker, who pays nothing regardless of
+# category and only gains if a rebate applies.
+POLYMARKET_FEES = FeeModel()
+
+# US exchange schedule: uniform 0.05 taker, -0.0125 maker rebate.
+POLYMARKET_US_FEES = FeeModel(quadratic_taker=0.05, quadratic_maker=-0.0125)
+
+# Category taker rates. Makers pay zero on all of them.
+POLYMARKET_CATEGORY_RATES: dict[str, float] = {
+    "crypto": 0.07,
+    "sports": 0.03,
+    "politics": 0.04,
+    "finance": 0.04,
+    "tech": 0.04,
+    "mentions": 0.04,
+    "economics": 0.05,
+    "culture": 0.05,
+    "weather": 0.05,
+    "other": 0.05,
+    "geopolitical": 0.0,  # fee-free
+    "world": 0.0,  # fee-free
+}
+
+
+def polymarket_fees(category: str = "other", *, maker_rebate: float = 0.0) -> FeeModel:
+    """Fee model for a Polymarket category.
+
+    Makers pay zero everywhere; pass ``maker_rebate`` as a positive number to
+    model rebate income (it is stored negated, since a rebate is a negative
+    cost). Unknown categories fall back to the ``other`` rate rather than
+    silently assuming free trading.
+    """
+    if maker_rebate < 0:
+        raise ValueError("maker_rebate must be non-negative; it is negated internally")
+    rate = POLYMARKET_CATEGORY_RATES.get(category.lower())
+    if rate is None:
+        rate = POLYMARKET_CATEGORY_RATES["other"]
+    return FeeModel(quadratic_taker=rate, quadratic_maker=-maker_rebate)
 
 
 @dataclass(frozen=True)

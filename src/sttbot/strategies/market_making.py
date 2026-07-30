@@ -31,6 +31,7 @@ Prices are probabilities in [0, 1] throughout.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from ..venues.prediction import FeeModel
@@ -56,11 +57,15 @@ def contract_variance(price: float) -> float:
 def breakeven_spread(price: float, fees: FeeModel) -> float:
     """Minimum bid-ask spread that covers a round trip's fees.
 
-    Buying at the bid and later selling at the ask pays the fee twice. Any
-    quoted spread narrower than this loses money on every completed round trip
-    regardless of how well the inventory is managed.
+    Both legs are priced as **maker** fills, because that is what a market
+    maker is: passive on the buy and passive on the sell. Using the taker rate
+    here would be wrong on any venue that splits the two — on Polymarket it is
+    the difference between paying 5% and earning a rebate.
+
+    Can be negative where makers are paid: the venue subsidises the round trip,
+    so even a zero spread is profitable before adverse selection.
     """
-    return fees.cost(price) * 2.0
+    return fees.cost(price, maker=True) * 2.0
 
 
 def untradeable_band(
@@ -112,6 +117,11 @@ class QuoteParams:
     max_inventory: float = 100.0
     # Contracts offered per side.
     quote_size: float = 10.0
+    # Venues quote on a discrete grid (1c on both Kalshi and Polymarket). Once
+    # fees are zero the tick becomes the binding floor on spread: you cannot
+    # quote inside one tick, so the tightest possible round trip earns exactly
+    # one tick minus whatever adverse selection takes.
+    tick_size: float = 0.01
 
     def __post_init__(self) -> None:
         if self.max_inventory <= 0:
@@ -120,6 +130,8 @@ class QuoteParams:
             raise ValueError("quote_size must be positive")
         if self.risk_aversion < 0:
             raise ValueError("risk_aversion must be non-negative")
+        if self.tick_size <= 0:
+            raise ValueError("tick_size must be positive")
 
 
 @dataclass(frozen=True)
@@ -172,9 +184,26 @@ class MarketMaker:
         return fair_value - skew
 
     def half_spread(self, price: float) -> float:
-        """Half-spread covering round-trip fees plus the target edge."""
+        """Half-spread covering round-trip maker fees plus the target edge.
+
+        Floored at half a tick so the two sides can never land on the same
+        grid point. Where makers are paid, ``breakeven_spread`` is negative and
+        the fee term legitimately *reduces* the required spread.
+        """
         required = (breakeven_spread(price, self.fees) + self.params.target_edge) / 2.0
-        return max(required, self.params.min_half_spread)
+        return max(required, self.params.min_half_spread, self.params.tick_size / 2.0)
+
+    def _to_tick(self, price: float, *, up: bool) -> float:
+        """Snap to the venue's grid, always away from the mid.
+
+        Rounding a bid down and an ask up keeps the realised spread at least as
+        wide as intended; rounding to nearest could quietly tighten it below
+        the level that was priced.
+        """
+        tick = self.params.tick_size
+        ticks = price / tick
+        snapped = (math.ceil(ticks) if up else math.floor(ticks)) * tick
+        return round(snapped, 10)
 
     def quote(
         self, fair_value: float, inventory: float = 0.0, time_remaining: float = 1.0
@@ -195,14 +224,15 @@ class MarketMaker:
         bid: float | None = None if inventory >= limit else reservation - half
         ask: float | None = None if inventory <= -limit else reservation + half
 
-        # Clamp into the tradeable band. A quote pinned to the boundary is
-        # dropped rather than posted at a price that cannot earn the spread.
+        # Snap to the venue grid (away from the mid), then clamp into the
+        # tradeable band. A quote pinned to the boundary is dropped rather than
+        # posted at a price that cannot earn the spread.
         if bid is not None:
-            bid = round(max(MIN_PRICE, min(MAX_PRICE, bid)), 4)
+            bid = round(max(MIN_PRICE, min(MAX_PRICE, self._to_tick(bid, up=False))), 10)
             if bid >= MAX_PRICE:
                 bid = None
         if ask is not None:
-            ask = round(max(MIN_PRICE, min(MAX_PRICE, ask)), 4)
+            ask = round(max(MIN_PRICE, min(MAX_PRICE, self._to_tick(ask, up=True))), 10)
             if ask <= MIN_PRICE:
                 ask = None
         # A crossed or locked quote is never valid; drop the passive side.

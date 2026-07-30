@@ -76,8 +76,39 @@ def test_flat_inventory_quotes_symmetrically(maker):
     quote = maker.quote(0.50, inventory=0.0)
     assert quote.is_two_sided
     assert quote.reservation_price == pytest.approx(0.50)
-    assert quote.bid == pytest.approx(0.50 - quote.half_spread)
-    assert quote.ask == pytest.approx(0.50 + quote.half_spread)
+    # Quotes snap to the venue's 1c grid, rounded away from the mid.
+    assert quote.bid == pytest.approx(0.49)
+    assert quote.ask == pytest.approx(0.51)
+    assert 0.50 - quote.bid == pytest.approx(quote.ask - 0.50)
+
+
+def test_quotes_land_on_the_tick_grid(maker):
+    for fair in (0.13, 0.372, 0.5049, 0.618, 0.87):
+        quote = maker.quote(fair)
+        for side in (quote.bid, quote.ask):
+            if side is not None:
+                assert side * 100 == pytest.approx(round(side * 100), abs=1e-6)
+
+
+def test_snapping_never_tightens_below_the_intended_spread(maker):
+    """Bid rounds down and ask rounds up, so the realised spread only widens."""
+    for fair in (0.201, 0.345, 0.5001, 0.789):
+        quote = maker.quote(fair)
+        assert quote.spread >= 2 * quote.half_spread - 1e-9
+
+
+def test_spread_is_at_least_one_tick_even_with_zero_fees_and_no_edge():
+    zero = MarketMaker(
+        QuoteParams(target_edge=0.0, min_half_spread=0.0, tick_size=0.01),
+        fees=POLYMARKET_FEES,
+    )
+    quote = zero.quote(0.50)
+    assert quote.spread >= 0.01
+
+
+def test_tick_size_validated():
+    with pytest.raises(ValueError):
+        QuoteParams(tick_size=0)
 
 
 def test_long_inventory_skews_quotes_down(maker):

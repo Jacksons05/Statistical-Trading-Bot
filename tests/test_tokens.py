@@ -9,7 +9,9 @@ passes an unauditable one as safe.
 import pytest
 
 from sttbot.data.tokens import (
+    geckoterminal_new_pools,
     geckoterminal_top_tokens,
+    pool_ohlcv,
     TokenPair,
     goplus_security,
     latest_token_addresses,
@@ -188,6 +190,85 @@ def test_geckoterminal_respects_the_page_cap():
 
     geckoterminal_top_tokens(pages=50, fetch=fake, pause=0)
     assert max(seen) == 10
+
+
+def test_new_pools_parses_birth_records():
+    def fake(url):
+        return {"data": [{
+            "attributes": {
+                "address": "POOL1",
+                "name": "FOO / SOL",
+                "pool_created_at": "2026-07-30T03:48:42Z",
+                "base_token_price_usd": "0.000123",
+                "reserve_in_usd": "2174.45",
+            },
+            "relationships": {"base_token": {"data": {"id": "solana_TOK1"}}},
+        }]}
+
+    (pool,) = geckoterminal_new_pools(pages=1, fetch=fake, pause=0)
+    assert pool.address == "POOL1"
+    assert pool.base_token == "TOK1"  # network prefix stripped
+    assert pool.price_usd == pytest.approx(0.000123)
+    assert pool.reserve_usd == pytest.approx(2174.45)
+
+
+def test_new_pools_deduplicates_across_pages():
+    """Consecutive pages overlap while the feed shifts under you."""
+    def fake(url):
+        return {"data": [
+            {"attributes": {"address": "SAME"}, "relationships": {}},
+        ]}
+
+    assert len(geckoterminal_new_pools(pages=4, fetch=fake, pause=0)) == 1
+
+
+def test_new_pools_stops_on_a_rate_limit_body():
+    def fake(url):
+        return {"status": {"error_code": 429}}
+
+    assert geckoterminal_new_pools(pages=5, fetch=fake, pause=0) == []
+
+
+def test_ohlcv_is_returned_oldest_first():
+    """The API answers newest-first, which reverses every return series."""
+    def fake(url):
+        return {"data": {"attributes": {"ohlcv_list": [
+            [300, 3.0, 5.0, 2.0, 4.0, 10.0],
+            [0, 1.0, 2.0, 0.5, 1.5, 20.0],
+        ]}}}
+
+    candles = pool_ohlcv("POOL", fetch=fake)
+    assert [c[0] for c in candles] == [0, 300]
+    assert candles[0][1] == 1.0  # first open is the entry price
+
+
+def test_ohlcv_drops_malformed_rows_and_tolerates_failure():
+    def fake(url):
+        return {"data": {"attributes": {"ohlcv_list": [
+            [0, 1.0, 2.0, 0.5, 1.5, 20.0],
+            [1, "bad", 2.0, 0.5, 1.5, 20.0],
+            [2, 1.0],
+        ]}}}
+
+    assert len(pool_ohlcv("POOL", fetch=fake)) == 1
+
+
+def test_ohlcv_distinguishes_fetch_failure_from_no_history():
+    """A rate limit is not the same fact as "this pool never traded".
+
+    Collapsing the two made 164 of 300 pools look like tokens that never
+    traded; re-querying them politely returned full history for every one.
+    """
+    def boom(url):
+        raise RuntimeError("HTTP Error 429")
+
+    assert pool_ohlcv("POOL", fetch=boom) is None
+    assert pool_ohlcv("POOL", fetch=lambda u: {"status": {"error_code": 429}}) is None
+    assert pool_ohlcv("POOL", fetch=lambda u: "nonsense") is None
+
+    # An answered request for a pool with no trades is genuinely empty.
+    empty = {"data": {"attributes": {"ohlcv_list": []}}}
+    assert pool_ohlcv("POOL", fetch=lambda u: empty) == []
 
 
 def test_pool_values_the_numeraire_side_in_usd():

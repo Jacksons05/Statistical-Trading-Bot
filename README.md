@@ -45,6 +45,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
 | `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
 | `strategies.amm` | Constant-product AMM mechanics: price impact, the no-arb fee band, profit-maximising CEX-DEX arbitrage sizing, impermanent loss. |
+| `backtest.cohort` | Birth-cohort return measurement: resolves captured pools from candle history, separates fetch failures from genuine no-trades, defends against initialisation sweeps / dust ticks / unconfirmed wicks, Hill tail index, and clone-family (wash) detection. |
 | `strategies.breadth` | Many-names/small-size portfolio engine: exact round-trip cost through the pool, depth-capped position sizing, breakeven-multiple and names-to-confidence arithmetic, and an assumption-driven Monte Carlo (explicitly not a backtest). |
 | `strategies.token_screen` | Pre-trade rug/honeypot screening for low-cap tokens, plus exit sizing against real pool depth. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
@@ -523,6 +524,60 @@ strategy.
 Execution is not implemented — the example prints intended orders. Real fills
 need a funded wallet, slippage-bounded routing and MEV protection, all of which
 make outcomes worse than modelled.
+
+### Measuring the tail: the answer is "this data cannot tell you"
+
+`backtest.cohort` and `examples/measure_token_cohort.py` exist to replace the
+assumed α with a measured one. I captured a **616-pool birth cohort** live
+(25-minute window) and resolved it from candle history.
+
+It cannot be done retrospectively. Solana creates ~1,600 pools an hour against
+a 200-row discovery feed, so the feed spans about **seven minutes** — there is
+no reaching back. And any cohort assembled later from what is still listed has
+had its failures delisted already.
+
+The first measurement looked spectacular: α = 0.59 (infinite mean), a 1,802×
+best peak, 2.65% of tokens reaching 100×. **Almost all of it was artifact.**
+An adversarial review of five independent checks found:
+
+- **70.6% of pools have their maximum high inside candle zero** — the
+  pool-initialisation sweep, where the first minute spans hundreds of × between
+  low and high before real liquidity exists.
+- The largest peak, 152,363×, was a single tick carrying **$0.00074 of volume**
+  in a pool whose entire lifetime volume was $6.65.
+- **My own code had a bug**: `pool_ohlcv` returned `[]` on a rate-limit error,
+  so 164 of 300 pools were silently recorded as "never traded". Re-querying
+  them politely returned full history for **every one**. It now returns `None`
+  for a failed fetch and `[]` only for a genuinely empty pool, and
+  `MeasurementReport` counts the three cases separately.
+- **Volume thresholds cannot establish that trading was real.** Three separate
+  mints named XAU/SOL, created within 18 seconds, had lifetime volumes of
+  $6529.84 / $6529.86 / $6529.98 — agreeing to four significant figures. One
+  bot, three clones, wash volume that clears any threshold. `detect_clone_groups`
+  now flags these.
+
+Peak distribution under each defence, same 136 pools:
+
+| Rule | n | Median | p90 | p99 | Best | α |
+| --- | --- | --- | --- | --- | --- | --- |
+| A raw | 136 | 1.34× | 7.84× | 404× | 152,363× | 0.55 |
+| B skip birth candle | 101 | 1.04× | 4.88× | 27.5× | 152,722× | 0.67 |
+| C peak needs $100 volume | 136 | 1.13× | 5.37× | 20.6× | 41.6× | 1.06 |
+| D peak confirmed by a close | 136 | 1.05× | 5.86× | 232× | 152,363× | 0.62 |
+| E all three | 101 | 1.00× | 2.92× | 18.1× | 27.5× | 0.93 |
+
+**α is not identified by this sample.** It moves from 0.55 to 1.06 across
+defensible rules, straddling the 1.0 line that separates a finite mean from an
+infinite one — and the whole breadth argument rests on which side it falls.
+Measured peaks also depend on candle aggregation, which is itself evidence the
+extremes are microstructure rather than opportunity. No mean should be quoted
+at all: deleting one dust tick moved it three orders of magnitude.
+
+The honest verdict is not "breadth works" or "breadth fails" — it is that a
+616-pool cohort observed for under an hour **cannot resolve the parameter the
+strategy depends on**. What it did establish is how to measure it without
+fooling yourself, and that every artifact found made the strategy look better
+than it is, never worse.
 
 The screen and the strategy also genuinely disagree, and the example says so:
 `token_screen` defaults to a 24-hour minimum age because ~69% of launches never

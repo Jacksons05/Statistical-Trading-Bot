@@ -252,6 +252,140 @@ def geckoterminal_top_tokens(
     return addresses
 
 
+GECKOTERMINAL_NEW_POOLS = (
+    "https://api.geckoterminal.com/api/v2/networks/{network}/new_pools?page={page}"
+)
+GECKOTERMINAL_OHLCV = (
+    "https://api.geckoterminal.com/api/v2/networks/{network}/pools/{pool}"
+    "/ohlcv/{timeframe}?aggregate={aggregate}&limit={limit}"
+)
+
+
+@dataclass(frozen=True)
+class NewPool:
+    """A pool observed at (or near) birth."""
+
+    address: str
+    name: str
+    base_token: str
+    created_at: str
+    price_usd: float | None
+    reserve_usd: float | None
+
+
+def geckoterminal_new_pools(
+    *,
+    network: str = "solana",
+    pages: int = GECKOTERMINAL_MAX_PAGE,
+    fetch: Fetch = http_fetch,
+    pause: float = GECKOTERMINAL_PAUSE,
+) -> list[NewPool]:
+    """Most recently created pools, newest first.
+
+    The whole feed spans only a few minutes on a busy chain -- roughly 1,600
+    Solana pools an hour against a 200-row ceiling -- so this cannot be used to
+    reconstruct a cohort after the fact. Sampling a birth cohort means polling
+    this repeatedly and persisting what you see; anything assembled later has
+    already had its failures delisted, which is the bias that makes this asset
+    class look survivable.
+    """
+    out: list[NewPool] = []
+    seen: set[str] = set()
+
+    for page in range(1, min(pages, GECKOTERMINAL_MAX_PAGE) + 1):
+        try:
+            payload = fetch(
+                GECKOTERMINAL_NEW_POOLS.format(network=network, page=page)
+            )
+        except Exception:
+            break
+        if not isinstance(payload, dict):
+            break
+        if (payload.get("status") or {}).get("error_code"):
+            break
+
+        rows = payload.get("data") or []
+        if not rows:
+            break
+        for row in rows:
+            attrs = row.get("attributes") or {}
+            address = attrs.get("address")
+            if not address or address in seen:
+                continue
+            seen.add(address)
+            base = ((row.get("relationships") or {}).get("base_token") or {}).get("data")
+            token = str((base or {}).get("id") or "")
+            prefix = f"{network}_"
+            out.append(
+                NewPool(
+                    address=str(address),
+                    name=str(attrs.get("name") or ""),
+                    base_token=token[len(prefix) :] if token.startswith(prefix) else token,
+                    created_at=str(attrs.get("pool_created_at") or ""),
+                    price_usd=_num(attrs.get("base_token_price_usd")),
+                    reserve_usd=_num(attrs.get("reserve_in_usd")),
+                )
+            )
+        if pause and page < pages:
+            time.sleep(pause)
+
+    return out
+
+
+def pool_ohlcv(
+    pool_address: str,
+    *,
+    network: str = "solana",
+    timeframe: str = "minute",
+    aggregate: int = 5,
+    limit: int = 100,
+    fetch: Fetch = http_fetch,
+) -> list[tuple[int, float, float, float, float, float]] | None:
+    """Candles as ``(timestamp, open, high, low, close, volume)``, oldest first.
+
+    Returns ``None`` when the history could not be fetched, and ``[]`` only
+    when the API answered and the pool genuinely has no candles. The
+    distinction is load-bearing and was originally missing: collapsing a
+    rate-limit failure into "no candles" made 164 of 300 pools look like
+    tokens that never traded, when re-querying them politely returned full
+    history for every one. Silently treating transport errors as data is how a
+    study measures its own rate limiter instead of the market.
+
+    Works for any pool address, including ones that have since died, which is
+    what makes forward measurement of a captured cohort possible.
+    """
+    try:
+        payload = fetch(
+            GECKOTERMINAL_OHLCV.format(
+                network=network,
+                pool=pool_address,
+                timeframe=timeframe,
+                aggregate=aggregate,
+                limit=limit,
+            )
+        )
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if (payload.get("status") or {}).get("error_code"):
+        return None
+
+    raw = ((payload.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+    candles = []
+    for entry in raw:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 6:
+            continue
+        values = [_num(v) for v in entry[:6]]
+        if any(v is None for v in values):
+            continue
+        candles.append(
+            (int(values[0]), values[1], values[2], values[3], values[4], values[5])
+        )
+    # The API returns newest-first; oldest-first is what a return series wants.
+    return sorted(candles)
+
+
 # --- GoPlus -----------------------------------------------------------------
 
 

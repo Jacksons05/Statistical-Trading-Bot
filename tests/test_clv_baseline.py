@@ -9,8 +9,13 @@ import datetime as dt
 import pytest
 
 from helpers import FakeMatch
-from sttbot.backtest.clv import clv_baseline, clv_skill
-from sttbot.backtest.walk_forward import best_of_book_odds, single_book_odds
+from sttbot.backtest.clv import (
+    clv_excess_per_bet,
+    clv_baseline,
+    clv_odds_matched_baseline,
+    clv_skill,
+)
+from sttbot.backtest.walk_forward import Bet, best_of_book_odds, single_book_odds
 
 
 def _match(entry, close, best=None):
@@ -90,3 +95,107 @@ def test_baseline_skips_matches_without_a_closing_line():
 def test_more_picks_per_match_tightens_the_estimate():
     matches = [_match((2.0, 3.5, 4.0), (1.95, 3.4, 3.9)) for _ in range(100)]
     assert clv_baseline(matches, picks_per_match=5).n == 500
+
+
+# --- odds-matched baseline --------------------------------------------------
+
+
+def _bet(odds: float, clv: float = 0.0) -> Bet:
+    return Bet(
+        date=dt.date(2024, 1, 1),
+        home="A",
+        away="B",
+        selection="H",
+        odds=odds,
+        model_prob=1.0 / odds,
+        gross_edge=0.0,
+        net_edge=0.0,
+        stake=1.0,
+        pnl=0.0,
+        won=False,
+        clv=clv,
+    )
+
+
+def test_odds_matched_baseline_exposes_a_longshot_preference():
+    """The confound this control exists for.
+
+    Here only longshots drift, and the "strategy" does nothing cleverer than
+    always bet longshots. The uniform baseline reports large apparent skill;
+    the odds-matched baseline correctly reports none.
+    """
+    # Home is the longshot and its price shortens; the other two do not move.
+    matches = [
+        _match((6.00, 3.60, 1.60), (5.00, 3.60, 1.60)) for _ in range(300)
+    ]
+    bets = [_bet(6.00) for _ in range(50)]
+
+    strategy_clv = 1.0 / 5.00 - 1.0 / 6.00  # what every longshot bet earns
+
+    uniform = clv_baseline(matches, odds_selector=single_book_odds)
+    matched = clv_odds_matched_baseline(matches, bets, odds_selector=single_book_odds)
+
+    assert clv_skill(strategy_clv, uniform) > 0.02  # looks like real skill
+    assert clv_skill(strategy_clv, matched) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_odds_matched_baseline_still_credits_genuine_selection():
+    """Picking the mover from among same-priced selections is real skill."""
+    # Two selections priced identically; only one of them shortens.
+    movers = [_match((3.00, 3.00, 3.00), (2.50, 3.00, 3.00)) for _ in range(200)]
+    bets = [_bet(3.00) for _ in range(50)]
+
+    strategy_clv = 1.0 / 2.50 - 1.0 / 3.00  # always picked the one that moved
+    matched = clv_odds_matched_baseline(movers, bets, odds_selector=single_book_odds)
+
+    # The bucket average is dragged down by the two non-movers, so beating it
+    # is a real result rather than a pricing artifact.
+    assert clv_skill(strategy_clv, matched) > 0.0
+
+
+def test_odds_matched_baseline_handles_empty_inputs():
+    matches = [_match((2.0, 3.5, 4.0), (1.9, 3.6, 4.2)) for _ in range(10)]
+    assert clv_odds_matched_baseline(matches, []).n == 0
+    assert clv_odds_matched_baseline([], [_bet(2.0)]).n == 0
+
+
+def test_excess_per_bet_is_the_paired_form_of_the_baseline():
+    """Mean per-bet excess must equal skill against the matched baseline."""
+    matches = [_match((2.10, 3.40, 3.80), (2.00, 3.50, 3.90)) for _ in range(200)]
+    bets = [_bet(2.10, clv=1.0 / 2.00 - 1.0 / 2.10) for _ in range(40)]
+
+    excess = clv_excess_per_bet(matches, bets, odds_selector=single_book_odds)
+    matched = clv_odds_matched_baseline(matches, bets, odds_selector=single_book_odds)
+
+    assert excess.size == len(bets)
+    assert float(excess.mean()) == pytest.approx(
+        clv_skill(bets[0].clv, matched), abs=1e-12
+    )
+
+
+def test_excess_per_bet_supports_a_standard_error():
+    """The reason this returns per-bet values rather than an aggregate."""
+    matches = [_match((3.00, 3.00, 3.00), (2.50, 3.00, 3.00)) for _ in range(200)]
+    bets = [_bet(3.00, clv=1.0 / 2.50 - 1.0 / 3.00) for _ in range(60)]
+
+    excess = clv_excess_per_bet(matches, bets, odds_selector=single_book_odds)
+    assert excess.size == 60
+    assert float(excess.mean()) > 0
+    # Constant CLV here, so the paired spread is zero and the edge is certain.
+    assert float(excess.std()) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_excess_per_bet_empty_for_unusable_input():
+    assert clv_excess_per_bet([], [_bet(2.0)]).size == 0
+    matches = [_match((2.0, 3.5, 4.0), (1.9, 3.6, 4.2)) for _ in range(10)]
+    assert clv_excess_per_bet(matches, []).size == 0
+    # Bets with no closing line contribute nothing.
+    assert clv_excess_per_bet(matches, [_bet(2.0, clv=None)]).size == 0
+
+
+def test_odds_matched_baseline_survives_a_degenerate_price_distribution():
+    """Every price identical collapses the quantile edges; must not crash."""
+    matches = [_match((3.0, 3.0, 3.0), (2.9, 2.9, 2.9)) for _ in range(50)]
+    summary = clv_odds_matched_baseline(matches, [_bet(3.0) for _ in range(5)])
+    assert summary.n > 0
+    assert summary.mean_clv > 0

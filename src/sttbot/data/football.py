@@ -144,10 +144,19 @@ _FDUK_ODDS_COLUMNS: dict[str, tuple[str, ...]] = {
 def _fduk_expression(field: str, present: set[str]) -> str:
     """COALESCE over whichever candidate columns this file actually has.
 
+    Every candidate goes through TRY_CAST. Some divisions carry a stray
+    non-numeric value in an odds column, which makes DuckDB type that whole
+    column VARCHAR; COALESCE then refuses to mix it with a DOUBLE sibling and
+    the load fails for the entire division. TRY_CAST both normalises the type
+    and turns the offending cell into NULL so it falls through to the next
+    book rather than killing the read.
+
     Returns a bare expression with no alias, so it can be reused verbatim in a
     WHERE clause.
     """
-    candidates = [f'"{c}"' for c in _FDUK_ODDS_COLUMNS[field] if c in present]
+    candidates = [
+        f'TRY_CAST("{c}" AS DOUBLE)' for c in _FDUK_ODDS_COLUMNS[field] if c in present
+    ]
     if not candidates:
         return "CAST(NULL AS DOUBLE)"
     if len(candidates) == 1:

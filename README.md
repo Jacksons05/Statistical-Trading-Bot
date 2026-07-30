@@ -37,7 +37,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `strategies.dixon_coles_fit` | Weighted-MLE fitter for the above: per-team attack/defence, home advantage γ and dependence ρ, with exponential time decay, `mean(attack)=0` identifiability, and an analytic gradient. |
 | `backtest.walk_forward` | Walk-forward engine — fit on a trailing window, bet the next matchday, settle after friction. Look-ahead is structurally impossible, not merely intended. |
 | `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
-| `backtest.clv` | Closing-line-value **control**: what CLV a random selection earns on the same matches, so mechanical CLV is not mistaken for skill. |
+| `backtest.clv` | Closing-line-value **controls**: what CLV a random selection earns on the same matches (`clv_baseline`), and what an *identically-priced* selection earns (`clv_odds_matched_baseline`, `clv_excess_per_bet`), so neither mechanical CLV nor a longshot preference is mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
 | `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
 | `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
@@ -168,17 +168,55 @@ reporting "+0.007 mean CLV, 64% positive" on that basis has demonstrated
 nothing. `backtest.clv.clv_skill` subtracts that free lunch.
 
 What survives the control: in the two thinnest markets tested, the model shows
-genuine selection skill (SC2 t = 5.1, SC3 t = 4.1 — significant even after
-correcting for the 14 division/entry-rule combinations tried). That is the
-project's "thin markets are less efficient" thesis showing up in data. But the
-skill is worth ~0.7 percentage points of implied probability, and the margin
-plus commission is worth more, so **it does not convert into profit**: SC3's
-+3.12% ROI is 0.5 standard errors from zero (SE 6.7%) and is noise, not a
-finding. Do not read that number as an edge.
+genuine selection skill (SC2 t = 5.1, SC3 t = 4.1). But the skill is worth
+~0.7 percentage points of implied probability, and the margin plus commission
+is worth more, so **it does not convert into profit**: SC3's +3.12% ROI is 0.5
+standard errors from zero (SE 6.7%) and is noise, not a finding. Do not read
+that number as an edge.
 
-Honest summary: the fitter works, the backtest is sound, and the strategy is
-not yet profitable. The measurable signal is in lower-tier markets and in line
-shopping — not in the Premier League.
+### Out-of-sample: the skill is real, and much broader than that
+
+`python examples/clv_thin_markets.py` widens the test to all 22 divisions
+football-data.co.uk publishes with both pre-match and closing odds (~53,000
+matches). Pre-specified before looking at any result: **CLV skill increases
+with market thinness**, thinness proxied by mean single-book overround
+(computed from prices alone, independent of the skill metric), tested with
+**one** Spearman correlation on the 15 divisions never examined when the
+hypothesis was formed. Skill is measured against an *odds-matched* baseline —
+each bet compared to the mean CLV of same-priced selections — so a preference
+for longshots cannot masquerade as forecasting.
+
+The hypothesis holds: **Spearman ρ = +0.539, p = 0.038**. More importantly, the
+earlier conclusion was too narrow. Skill is not a Scottish curiosity — it is
+present almost everywhere, and **14 of 15 out-of-sample divisions are
+individually significant at t > 2**:
+
+| Division | Overround | Bets | ROI | Skill | t |
+| --- | --- | --- | --- | --- | --- |
+| EC (National League) | 1.0793 | 2,467 | −3.34% | +0.0075 | **10.2** |
+| SC1 (Scottish Champ.) | 1.0843 | 558 | −8.91% | +0.0072 | 5.7 |
+| SP2 (Segunda) | 1.0625 | 2,501 | −10.96% | +0.0052 | 7.8 |
+| B1 (Belgian Pro) | 1.0698 | 1,583 | −5.34% | +0.0044 | 5.0 |
+| F1 (Ligue 1) | 1.0541 | 2,171 | −1.56% | +0.0030 | 5.3 |
+| E0–E3 *(in-sample)* | ~1.051 | — | — | ~+0.0002 | <2 |
+
+The English tiers are the *exception*, not the Scottish leagues being special.
+They have the lowest overrounds in the sample and near-zero skill — which is
+what "efficiently priced" looks like. Testing only England and Scotland made a
+general pattern look like a local quirk.
+
+**Caveat on the mechanism.** Thin markets also have wider CLV dispersion
+(ρ = +0.661 with overround, p = 0.007), so part of the thinness–skill link is a
+scale effect rather than pure inefficiency. Normalising skill by dispersion
+barely moves the point estimate (ρ = +0.539 → +0.496) but loses significance at
+n = 15 (p = 0.060). The direction is supported; "thinness causes skill" is not
+cleanly separable from "thinness widens everything" at this sample size.
+
+Honest summary: the fitter works, the backtest is sound, the model has real and
+broadly significant forecasting skill against the closing line — and it is
+**still not profitable in a single division out of 15**. Skill of ~0.3–0.75
+percentage points does not cover a 5–9% overround. Beating the closing line by
+a little is not the same as beating the book.
 
 ## Crypto, meme coins, and prediction markets
 

@@ -39,6 +39,11 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
 | `backtest.clv` | Closing-line-value **control**: what CLV a random selection earns on the same matches, so mechanical CLV is not mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
+| `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
+| `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
+| `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
+| `strategies.amm` | Constant-product AMM mechanics: price impact, the no-arb fee band, profit-maximising CEX-DEX arbitrage sizing, impermanent loss. |
+| `strategies.token_screen` | Pre-trade rug/honeypot screening for low-cap tokens, plus exit sizing against real pool depth. |
 | `economics.friction` | Net-edge formula, maker/taker routing rule, order-size/timing stealthing. |
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
 | `execution.order_manager` | `DynamicOrderManager` — pre-trade slippage cap + Time-To-Live cancellation. |
@@ -174,6 +179,146 @@ finding. Do not read that number as an edge.
 Honest summary: the fitter works, the backtest is sound, and the strategy is
 not yet profitable. The measurable signal is in lower-tier markets and in line
 shopping — not in the Premier League.
+
+## Crypto, meme coins, and prediction markets
+
+`python examples/crypto_and_prediction.py` demonstrates all three. Each module
+targets a specific way naive implementations lose money.
+
+**Fees that aren't flat.** Kalshi charges `0.07 · P · (1−P)` per contract —
+1.75c at a 50c contract, 0.33c at 5c. An identical 1c gross edge is therefore
+*unprofitable mid-book and profitable at the tail*. Modelling this as a flat
+percentage gets the sign of the trade wrong. `venues.prediction` also refuses to
+pair two markets unless they're explicitly declared `equivalent=True`: a
+same-headline market with a different resolution source turns a "risk-free"
+hedge into an unhedged bet on a technicality.
+
+**Arbitrage sized to the wrong target.** The intuitive AMM arb trades until the
+pool price equals the external price. That overshoots — the marginal unit earns
+nothing while still paying fees. `optimal_arbitrage` maximises profit directly:
+
+```
+dy* = (√(p_ext · x · y · γ) − y) / γ
+```
+
+Tests verify the closed form against a brute-force search over ±50% of the
+optimum, and confirm it beats price-equality sizing. `no_arb_band` gives the
+range where fees make *any* size unprofitable — divergence inside it is not an
+opportunity, however large it looks against mid.
+
+**Position sizing that ignores the exit.** For thin tokens the dominant loss
+mode isn't a bad entry, it's being unable to sell. `token_screen` covers the rug
+and honeypot heuristics (LP lock, holder concentration, mint/freeze authority,
+sell-tax asymmetry, simulated sell), and `position_limit` takes the *smaller* of
+your risk budget and what the pool can actually absorb on exit. Missing data
+counts as a failure, not a pass — absence of evidence isn't evidence of safety
+for an asset like this.
+
+The checks are research-led rather than invented. The literature keys on
+**top-10 concentration** (~30%), not just the largest holder — ten coordinated
+wallets at 5% each carry the same exit risk as one whale while passing a
+single-holder check comfortably — and on **sniper/bundled wallets** holding the
+launch float. Both are screened, with a test for the distributed-whale case
+that a top-1 measure alone misses.
+
+### Why the defaults are strict
+
+Published base rates, 2025–2026:
+
+| Metric | Figure |
+| --- | --- |
+| Meme coins that die or lose meaningful volume | ~97% (Binance Research) |
+| pump.fun tokens whose last trade is their launch day | ~69% |
+| pump.fun graduation to a DEX listing | <2% through 2025, ~0.26% by mid-2026 |
+| Average rug pull | ~$510k, >$2.8bn total in 2025 (Chainalysis) |
+
+Against a base rate that skewed, essentially all the achievable edge is in
+**avoidance, not selection**. A screen that rejects almost everything is working
+as designed: a false reject costs you a missed winner, a false accept costs the
+whole position. Loosening thresholds to surface more candidates is usually a
+mistake. The ~69% same-day death rate is also what justifies the 24h minimum
+age — it removes most of the distribution at almost no opportunity cost.
+
+These are heuristics over self-reported metadata, not a safety guarantee. A
+token can pass every check and still go to zero; most will. Nothing here
+estimates whether a token goes *up*.
+
+## Scalping prediction markets
+
+`python examples/scalp_prediction_markets.py`. The edge is liquidity
+provision, not speed — which is deliberate: scalping liquid majors would be the
+head-to-head latency competition this project exists to avoid.
+
+**Fees decide where you can quote at all.** Kalshi's quadratic fee is paid twice
+on a round trip, so the breakeven spread is 3.50c at a 50c contract and 0.67c
+at 5c. `untradeable_band` turns that into the actionable number:
+
+| Market spread | Blocked region (Kalshi) |
+| --- | --- |
+| 1c | 0.08–0.92 — **84% of the book** |
+| 2c | 0.18–0.82 — 64% of the book |
+| 4c | none |
+
+So on Kalshi you scalp the tails, not the coin flips.
+
+### Polymarket: makers pay nothing
+
+`python examples/scalp_polymarket.py`. Polymarket's 2026 schedule charges
+**takers only**, using the same quadratic shape at a category-dependent rate
+(0.03 sports, 0.04 politics/finance/tech, 0.05 economics/culture/weather, 0.07
+crypto; geopolitical and world-events markets are fee-free). Part of it is
+rebated to makers. A market maker is passive on *both* legs, so it pays zero —
+and with a rebate is paid to quote:
+
+| Maker round-trip cost | Kalshi | Polymarket | Polymarket + rebate |
+| --- | --- | --- | --- |
+| at 0.05 | 0.67c | 0.00c | −0.12c |
+| at 0.50 | 3.50c | 0.00c | −0.62c |
+
+At a 2c market spread Kalshi blocks 64% of the book; Polymarket blocks **none**.
+Use `polymarket_fees(category, maker_rebate=...)`; an unknown category falls
+back to the `other` rate rather than silently assuming free trading.
+
+This also fixed a real bug: `breakeven_spread` was pricing both legs at the
+*taker* rate. On Kalshi maker and taker are equal so it made no difference; on
+Polymarket it was the gap between paying 5% and earning a rebate.
+
+**Then the tick becomes the binding constraint.** With fees gone, the 1c grid
+is the floor: quotes snap to it (bid down, ask up, so snapping never tightens
+the intended spread), the tightest round trip earns 1–2c, and sub-cent noise is
+unmonetisable — a ±0.3c wobble produces **zero fills**, because the quote sits
+at 0.49/0.51 and the price never reaches it.
+
+**Inventory skew has to be scaled to the spread.** Quotes shift against
+inventory (Avellaneda-Stoikov) using `p(1-p)` as the risk scale, tapering to
+zero at expiry. The scale is easy to get wrong: at `risk_aversion=1.0` the shift
+is 25c at full inventory against a ~1c spread, and the maker buys back its own
+position far above fair value. Measured on identical flow:
+
+| `risk_aversion` | Skew at full inventory | Net P&L |
+| --- | --- | --- |
+| 0.01 | 0.25c | +2.31 |
+| 0.05 (default) | 1.25c | +2.01 |
+| 0.25 | 6.25c | +0.52 |
+| 1.00 | 25.0c | **−5.05** |
+
+**Adverse selection is the real cost, and it's measured, not assumed.** A
+simulator that fills you at your quote against an unreactive path reports a
+profit almost regardless of strategy. `mm_simulator` marks out every fill —
+price N steps later versus fill price, signed by direction — so being picked off
+shows up explicitly, and before the P&L does.
+
+Two properties the tests pin, both counterintuitive:
+
+- **Quoting around the last mid loses whenever the price swings wider than your
+  spread.** With ±3c oscillation and a 0.5c half-spread, the maker sells at
+  0.475 while fair value is 0.50, every time. A maker needs a fair-value
+  estimate better than "the last mid".
+- **Slow drift never fills a re-quoting maker** — the quote re-centres and
+  outruns it. Adverse selection comes from jumps that outpace re-quoting.
+
+Fills assume queue priority and no partial fills, so all of this is an **upper
+bound**. Real quoting is worse.
 
 ## Design notes
 

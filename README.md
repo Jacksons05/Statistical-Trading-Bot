@@ -433,6 +433,42 @@ sell simulation. Those come back as **unknowns rather than passes** —
 `token_screen` distinguishes "a check ran and the token lost" from "the data
 was never there", because the two call for different responses.
 
+### There is no "established but thin" sweet spot
+
+The obvious next hypothesis was that tokens surviving their first month stay
+small enough to be inefficient but grow big enough to trade.
+`python examples/token_capacity_cohorts.py` tests it, scoring every token on
+two axes at once — exit capacity inside a 2% impact budget, and turnover
+(24h volume ÷ pool liquidity), because liquidity without flow is stranded
+capital rather than an opportunity.
+
+| Cohort | n | Median liquidity | Median exit | Median turnover |
+| --- | --- | --- | --- | --- |
+| < 1 day | 26 | $18,390 | $160 | **175.2×** |
+| 1–7 days | 13 | $22,633 | $197 | 94.5× |
+| 7–30 days | 16 | $308,731 | $2,686 | 0.04× |
+| 1–6 months | 28 | $3,091,221 | $26,892 | **0.00×** |
+| > 6 months | 68 | $809,169 | $7,039 | **0.00×** |
+
+Capacity does improve with age — roughly 150× from fresh launch to one month.
+But the flow disappears at exactly the same rate. **90% of established tokens
+turn over less than 0.1× of their pool per day**, and within the thin band
+($25k–$1M liquidity) it is also 90%. Of 96 established tokens, exactly **one**
+had both a ≥$5k exit and ≥0.5× turnover — and it was SOL itself, at $26M of
+liquidity, which is the opposite of thin.
+
+The two properties are anticorrelated, and the reason is structural: a thin
+market that is genuinely active does not stay thin. It either attracts
+liquidity until it is no longer thin, or the activity dies and leaves stranded
+depth behind. Fresh-and-thin has flow but no capacity; established-and-liquid
+has both but is competitive; established-and-thin has capacity and no
+counterparty. There is nowhere to sit.
+
+This is the same shape as the Polymarket result — 91% of markets there traded
+$0 — and it is the sharpest limit on the whole thin-markets thesis so far.
+Inefficiency is easy to find in places nobody trades. That is not a
+coincidence; it is the reason the inefficiency survives.
+
 ## Design notes
 
 - **Testability first.** Clocks and sleep are injected into the order manager

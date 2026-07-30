@@ -9,6 +9,7 @@ passes an unauditable one as safe.
 import pytest
 
 from sttbot.data.tokens import (
+    geckoterminal_top_tokens,
     TokenPair,
     goplus_security,
     latest_token_addresses,
@@ -110,6 +111,98 @@ def test_clients_tolerate_unexpected_payloads():
     assert latest_token_addresses(fetch=lambda u: {"error": "x"}) == []
     assert search_pairs("q", fetch=lambda u: []) == []
     assert pairs_for_tokens(["A"], fetch=lambda u: None, pause=0) == {}
+
+
+def test_geckoterminal_collects_base_tokens_in_order():
+    def fake(url):
+        page = int(url.rsplit("page=", 1)[1])
+        return {
+            "data": [
+                {"relationships": {"base_token": {"data": {"id": f"solana_T{page}{i}"}}}}
+                for i in range(2)
+            ]
+        }
+
+    got = geckoterminal_top_tokens(pages=3, fetch=fake, pause=0)
+    assert got == ["T10", "T11", "T20", "T21", "T30", "T31"]
+
+
+def test_geckoterminal_deduplicates_and_filters_other_networks():
+    def fake(url):
+        return {
+            "data": [
+                {"relationships": {"base_token": {"data": {"id": "solana_A"}}}},
+                {"relationships": {"base_token": {"data": {"id": "solana_A"}}}},
+                {"relationships": {"base_token": {"data": {"id": "eth_B"}}}},
+                {"relationships": {}},
+            ]
+        }
+
+    assert geckoterminal_top_tokens(pages=1, fetch=fake, pause=0) == ["A"]
+
+
+def test_geckoterminal_stops_on_a_rate_limit_body():
+    """The free tier answers 200 with error_code 429 inside the payload.
+
+    Treating that as an empty page would silently report a short universe as
+    though it were the whole venue.
+    """
+    calls = {"n": 0}
+
+    def fake(url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"data": [
+                {"relationships": {"base_token": {"data": {"id": "solana_A"}}}}
+            ]}
+        return {"status": {"error_code": 429, "error_message": "rate limited"}}
+
+    got = geckoterminal_top_tokens(pages=5, fetch=fake, pause=0)
+    assert got == ["A"]
+    assert calls["n"] == 2  # stopped, did not burn the remaining pages
+
+
+def test_geckoterminal_keeps_what_it_has_when_the_fetch_raises():
+    """An HTTP 429 mid-walk must not discard the pages already collected."""
+    calls = {"n": 0}
+
+    def fake(url):
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise RuntimeError("HTTP Error 429: Too Many Requests")
+        return {"data": [
+            {"relationships": {"base_token": {"data": {"id": f"solana_A{calls['n']}"}}}}
+        ]}
+
+    assert geckoterminal_top_tokens(pages=8, fetch=fake, pause=0) == ["A1", "A2"]
+
+
+def test_geckoterminal_respects_the_page_cap():
+    seen = []
+
+    def fake(url):
+        seen.append(int(url.rsplit("page=", 1)[1]))
+        return {"data": [
+            {"relationships": {"base_token": {"data": {"id": f"solana_{len(seen)}"}}}}
+        ]}
+
+    geckoterminal_top_tokens(pages=50, fetch=fake, pause=0)
+    assert max(seen) == 10
+
+
+def test_pool_values_the_numeraire_side_in_usd():
+    """Price impact must come out in dollars, not in SOL."""
+    pair = parse_pair(raw_pair(liquidity={"usd": 40_000.0, "base": 1_000_000.0}))
+    pool = pair.pool()
+    assert pool is not None
+    # Half the USD figure is the numeraire leg, so spot is $/token.
+    assert pool.numeraire_reserve == pytest.approx(20_000.0)
+    assert pool.spot_price == pytest.approx(0.02)
+
+
+def test_pool_is_none_without_reserves():
+    assert parse_pair(raw_pair(liquidity={"usd": 40_000.0})).pool() is None
+    assert parse_pair(raw_pair(liquidity={"usd": 0.0, "base": 10.0})).pool() is None
 
 
 def test_goplus_merges_results_per_address():

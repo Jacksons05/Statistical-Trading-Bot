@@ -186,6 +186,72 @@ def search_pairs(query: str, *, fetch: Fetch = http_fetch) -> list[TokenPair]:
     return [parse_pair(raw) for raw in payload.get("pairs") or []]
 
 
+# --- GeckoTerminal (discovery of *established* tokens) ----------------------
+#
+# DexScreener's profile feed is newest-first by construction, so it can only
+# ever show fresh launches. Answering "what about tokens that survived their
+# first month?" needs a source ordered by activity rather than recency.
+
+GECKOTERMINAL_POOLS = (
+    "https://api.geckoterminal.com/api/v2/networks/{network}/pools?page={page}"
+)
+
+# The free tier allows roughly 30 calls a minute and caps out at page 10.
+GECKOTERMINAL_MAX_PAGE = 10
+GECKOTERMINAL_PAUSE = 4.0
+
+
+def geckoterminal_top_tokens(
+    *,
+    network: str = "solana",
+    pages: int = GECKOTERMINAL_MAX_PAGE,
+    fetch: Fetch = http_fetch,
+    pause: float = GECKOTERMINAL_PAUSE,
+) -> list[str]:
+    """Base-token addresses of the most-traded pools, ordered by 24h volume.
+
+    Paced by default, because the free tier rate-limits hard and signals it two
+    different ways: an HTTP 429, or a 200 whose *body* carries an
+    ``error_code`` of 429. The second is the dangerous one -- it parses as a
+    normal response, so an unguarded caller reads it as "no more pools" and
+    treats a truncated walk as the whole venue.
+
+    Both are treated as a stop signal. The result is then whatever was
+    collected before the limit hit, which may be short of ``pages``; callers
+    that need to distinguish a complete walk from a truncated one should
+    compare the length against ``pages * 20``.
+    """
+    addresses: list[str] = []
+    seen: set[str] = set()
+
+    for page in range(1, min(pages, GECKOTERMINAL_MAX_PAGE) + 1):
+        try:
+            payload = fetch(GECKOTERMINAL_POOLS.format(network=network, page=page))
+        except Exception:
+            break  # rate limited or unreachable: keep what we have
+        if not isinstance(payload, dict):
+            break
+        if (payload.get("status") or {}).get("error_code"):
+            break
+
+        rows = payload.get("data") or []
+        if not rows:
+            break
+        for row in rows:
+            base = ((row.get("relationships") or {}).get("base_token") or {}).get("data")
+            ident = str((base or {}).get("id") or "")
+            prefix = f"{network}_"
+            if ident.startswith(prefix):
+                address = ident[len(prefix) :]
+                if address not in seen:
+                    seen.add(address)
+                    addresses.append(address)
+        if pause and page < pages:
+            time.sleep(pause)
+
+    return addresses
+
+
 # --- GoPlus -----------------------------------------------------------------
 
 

@@ -29,6 +29,8 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | --- | --- |
 | `data.storage` | `TickStore` — DuckDB-backed tick/order-book storage with Parquet export; `:memory:` for tests. |
 | `data.datasets` | Catalog of openly-licensed datasets + caching downloader (`STTBOT_DATA_DIR`), with checksum pinning; `LIVE_ENDPOINTS` records the direct-egress APIs and their access requirements. |
+| `data.tokens` | DexScreener + GoPlus clients mapped into `TokenMetadata`, keeping *zero* and *unknown* distinct so a clean token isn't failed on a gap that doesn't exist. |
+| `venues.polymarket` | Full-venue client: gamma keyset enumeration (with the `after_cursor` trap encoded), CLOB order books with depth walking, complete-basket arbitrage and executable sizing. |
 | `data.probe` | `python -m sttbot.data.probe` — re-measures which data hosts this machine can actually reach. |
 | `data.football` | Loaders for the bulk football dataset **and** football-data.co.uk season CSVs (the only wired-up source carrying a genuine closing line); overround and de-vig helpers. |
 | `strategies.base` | `Strategy` + `Param` — declarative hyperparameters with grid-search introspection (the `# @param` convention, made programmatic). |
@@ -357,6 +359,79 @@ Two properties the tests pin, both counterintuitive:
 
 Fills assume queue priority and no partial fills, so all of this is an **upper
 bound**. Real quoting is worse.
+
+## Scanning all of Polymarket
+
+`python examples/scan_polymarket.py` enumerates the entire open venue —
+**16,241 events, 144,876 markets** — and looks for structure worth trading.
+
+**The venue is enormous and almost entirely empty.** 91.1% of markets traded
+$0 in the last 24 hours and median market liquidity is **$18**, so the $63M
+of daily volume comes from a few hundred markets.
+
+| Pass | Result |
+| --- | --- |
+| Complete multi-outcome baskets | 5,721 |
+| Positive edge at top of book | 7 |
+| Executable against real depth | 7, totalling **$66 profit on $2,334 capital** |
+| Markets worth quoting (mid 0.05–0.95, ≥2 ticks, ≥$10k volume) | **57 of 144,876** |
+
+Total boundary arbitrage available across the whole platform is $66, locked
+until the events resolve in January 2027, and the single largest opportunity
+caps out at 950 contracts. Date ladders ("X by July 31" nested inside "X by
+Dec 31") were checked separately for monotonicity violations: **zero** across
+140 ladders. Those markets are internally consistent.
+
+Two traps are encoded in `venues.polymarket` because both produce confidently
+wrong answers rather than errors, and both caught me first:
+
+- **Pagination.** The gamma response field is `next_cursor` but the request
+  parameter is `after_cursor`. Sending it back under the name it arrived with
+  is accepted and ignored, so you re-read page one forever — my first
+  "complete" pull was 200 events that were 100 unique and 100 duplicates.
+  Plain `offset` isn't an escape either: it caps near 2,400 against a real
+  universe of 16,241, truncating to ~15% while still looking finished.
+- **Basket completeness.** Scoring only the legs that happen to be quoted
+  reported **172 arbitrages with edges up to +0.85/contract**. Requiring the
+  full outcome set leaves 7. The other 165 were unhedged shorts on the
+  outcomes I'd dropped, wearing an arbitrage costume.
+
+The scalping screen documents its own vacuity: because Polymarket rebates
+makers, breakeven spread is negative and *all 108,160* live two-sided markets
+"clear the round-trip fee". A screen everything passes measures nothing — the
+binding constraint is adverse selection, which `backtest.mm_simulator` measures
+directly.
+
+## Screening live meme tokens
+
+`python examples/screen_meme_tokens.py` joins DexScreener (discovery, pool
+depth, age) with GoPlus (holder concentration, LP locks, mint/freeze authority,
+transfer taxes) and runs `strategies.token_screen` over real Solana launches.
+
+On a live run of 24 discovered tokens: **0 passed, 24 rejected**, almost all
+for being under 24 hours old or under $25k of liquidity. That is the screen
+working — it is built for *avoidance, not selection*, and ~97% of these tokens
+die.
+
+The more useful number is capacity. Sizing the exit against real pool depth at
+a 2% price-impact budget:
+
+| Token | Pool liquidity | 24h volume | Max exit |
+| --- | --- | --- | --- |
+| Faucina | $37,148 | $583,661 | **$323** |
+| RIKA | $19,874 | $1,299,391 | **$173** |
+| PIBBLE | $8,856 | $494,199 | **$77** |
+
+RIKA turned over $1.3M in a day against a pool that can only absorb **$173**
+on the way out. Volume in this asset class is not liquidity — it is the same
+few dollars round-tripping. Meme-coin scalping is capacity-limited to a few
+hundred dollars per token, which caps the strategy long before edge does.
+
+Honest gap: GoPlus had no holder data for 22 of the 24 tokens (they were
+minutes old), and neither source covers sniper/bundle concentration or a real
+sell simulation. Those come back as **unknowns rather than passes** —
+`token_screen` distinguishes "a check ran and the token lost" from "the data
+was never there", because the two call for different responses.
 
 ## Design notes
 

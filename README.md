@@ -582,11 +582,47 @@ finished at ~04:21. One garbage print, arriving between two runs, moved the
 measured tail by 84×. An α estimated from this data is a snapshot that any
 subsequent dust tick can overturn.
 
-The honest verdict is not "breadth works" or "breadth fails" — it is that a
-616-pool cohort observed for under an hour **cannot resolve the parameter the
-strategy depends on**. What it did establish is how to measure it without
-fooling yourself, and that every artifact found made the strategy look better
-than it is, never worse.
+The honest verdict at 45 minutes was not "breadth works" or "breadth fails" —
+it was that the cohort **could not resolve the parameter the strategy depends
+on**. Every artifact found made the strategy look better than it is, never
+worse.
+
+### At 3.6 days: the tail index was the wrong question
+
+The same cohort was re-resolved three and a half days later, **610 of 616
+pools**, using hourly candles covering their whole lives. It did not identify
+α — the estimate spread *wider*, from 0.20 to 1.03 across defensible rules.
+It found something that matters more.
+
+**These tokens do not go to zero. They stop trading.**
+
+| Death measured by | Rate |
+| --- | --- |
+| Price (final < 1% of entry) | **4.3%** |
+| Silence (no trade in 6h) | 99.0% |
+| Silence (no trade in 24h) | **95.6%** |
+| Silence (no trade in 48h) | 92.1% |
+
+69.6% of pools produced **exactly one hourly candle** in their entire life, and
+the median pool last traded 87 hours ago. Only **27 of 610 (4.4%)** were still
+tradeable after 3.6 days, and of those only one was meaningfully up on real
+volume.
+
+This invalidates the survival statistic both readings had reported. "97.3%
+survived" at 45 minutes and "98.3%" at 3.6 days are pure censoring artifacts: a
+token whose market disappears stops producing candles, so its last close
+freezes at whatever it printed on the way out and it looks alive forever. **A
+price series cannot show you the absence of trading.** `Outcome.died` now says
+so in its docstring and `Outcome.stopped_trading()` is the measure that means
+something.
+
+For the strategy the consequence is blunt and does not depend on α at all. A
+breadth book buys many names intending to exit winners at a take-profit. Within
+a day, **95.6% of those positions have no counterparty**. You cannot run an
+exit rule on assets nobody will buy, so the tail index is irrelevant — the
+position is a total loss regardless of what the last print says. That is a
+harder constraint than any of the capacity ceilings found earlier, and it is
+the one that ends this line of work.
 
 The screen and the strategy also genuinely disagree, and the example says so:
 `token_screen` defaults to a 24-hour minimum age because ~69% of launches never

@@ -58,6 +58,7 @@ class Outcome:
     max_price: float
     final_price: float
     candles: int
+    last_trade_ts: int = 0
 
     @property
     def max_multiple(self) -> float:
@@ -69,7 +70,27 @@ class Outcome:
 
     @property
     def died(self) -> bool:
+        """Price collapse. **Nearly useless on its own** -- see
+        :meth:`stopped_trading`.
+
+        A token whose market disappears stops producing candles, so its last
+        close is frozen at whatever it printed on the way out. Measured on a
+        real cohort at 3.6 days, this said 98.3% had "survived" while 94.8% had
+        not traded in 24 hours. Death here is a liquidity event, not a price
+        event, and a price series cannot show you the absence of trading.
+        """
         return self.final_multiple <= DEAD_MULTIPLE
+
+    def hours_since_last_trade(self, now_ts: float) -> float:
+        return max((now_ts - self.last_trade_ts) / 3600.0, 0.0)
+
+    def stopped_trading(self, now_ts: float, max_silence_hours: float = 24.0) -> bool:
+        """Whether anyone has traded this recently enough to exit into.
+
+        This is the death measure that matters for a strategy: a position you
+        cannot sell is a total loss whatever the last print says.
+        """
+        return self.hours_since_last_trade(now_ts) > max_silence_hours
 
 
 @dataclass(frozen=True)
@@ -172,7 +193,8 @@ def measure_outcomes(
         if not eligible:
             # Nothing traded enough to be a real print; the position is flat.
             outcomes.append(
-                Outcome(member.pool, entry, entry, series[-1][4], len(series))
+                Outcome(member.pool, entry, entry, series[-1][4], len(series),
+                        int(series[-1][0]))
             )
             continue
 
@@ -187,6 +209,7 @@ def measure_outcomes(
                 max_price=max(peak, entry * 0.0),
                 final_price=series[-1][4],
                 candles=len(series),
+                last_trade_ts=int(series[-1][0]),
             )
         )
 

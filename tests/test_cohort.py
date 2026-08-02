@@ -288,3 +288,42 @@ def test_distinct_names_are_never_grouped():
     volumes = {"A": 1000.0, "B": 1000.0}
     names = {"A": "ONE/SOL", "B": "TWO/SOL"}
     assert detect_clone_groups(members, volumes, name_of=lambda m: names[m.pool]) == []
+
+
+# --- liquidity death --------------------------------------------------------
+
+
+def test_price_survival_is_meaningless_when_trading_stops():
+    """Measured on a real cohort at 3.6 days: 98.3% "survived" on price while
+    94.8% had not traded in 24 hours.
+
+    A token whose market disappears stops producing candles, so its last close
+    freezes at whatever it printed on the way out. The price series cannot show
+    you the absence of trading.
+    """
+    now = 1_000_000
+    frozen = Outcome("P", entry_price=1.0, max_price=2.0, final_price=1.0,
+                     candles=1, last_trade_ts=now - 80 * 3600)
+    assert not frozen.died          # price says it is fine
+    assert frozen.stopped_trading(now)  # liquidity says it is gone
+
+
+def test_a_still_trading_pool_is_not_counted_as_dead():
+    now = 1_000_000
+    live = Outcome("P", entry_price=1.0, max_price=2.0, final_price=1.5,
+                   candles=40, last_trade_ts=now - 1800)
+    assert not live.stopped_trading(now)
+    assert live.hours_since_last_trade(now) == pytest.approx(0.5)
+
+
+def test_silence_threshold_is_tunable():
+    now = 1_000_000
+    o = Outcome("P", 1.0, 2.0, 1.0, 1, last_trade_ts=now - 10 * 3600)
+    assert not o.stopped_trading(now, max_silence_hours=24)
+    assert o.stopped_trading(now, max_silence_hours=6)
+
+
+def test_last_trade_timestamp_is_carried_through_measurement():
+    series = [candle(0, 1.0, 2.0, 1.0, 1.5), candle(3600, 1.5, 1.6, 1.4, 1.5)]
+    (outcome,) = measure_outcomes([member()], lambda p: series).outcomes
+    assert outcome.last_trade_ts == 3600

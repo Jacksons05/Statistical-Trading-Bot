@@ -52,6 +52,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
 | `execution.order_manager` | `DynamicOrderManager` — pre-trade slippage cap + Time-To-Live cancellation. |
 | `risk.circuit_breaker` | High-water-mark **and** rolling-window drawdown kill switch. |
+| `paper` | Durable paper trading: DuckDB-backed account where fills are the only state (cash/positions/P&L are recomputed, never stored), idempotent on a caller-supplied ref, and an all-or-nothing basket runner wired to the circuit breaker. |
 | `monitoring.alerts` | Fail-safe Discord/Telegram webhook notifier (stdlib only). |
 
 ## Quick start
@@ -630,6 +631,62 @@ trade past day one, but the only cohort with flow is *under* a day old. Running
 breadth there means lowering that floor deliberately and managing the risk by
 size instead of selection, keeping only the checks size cannot protect you
 from — live mint authority, freeze authority, and top-10 concentration.
+
+## Paper trading with real money on the line, minus the money
+
+Everything above is a backtest or a snapshot. `sttbot.paper` is the first piece
+that runs continuously against live prices and keeps a durable record — fake
+money, real markets, real accounting.
+
+`PaperBroker` in `execution.oms` is an in-memory simulator built for tests: it
+forgets everything on exit. `sttbot.paper.PaperAccount` is the other thing a
+paper account has to be. It is backed by DuckDB, and its one design rule is
+that **fills are the only state** — cash, positions, average cost and realised
+P&L are all recomputed from the fill ledger rather than stored and mutated
+beside it. A long-running bot that keeps a running cash balance *and* a fill
+log will eventually disagree with itself after a crash mid-write, and the
+disagreement is invisible until the numbers are already wrong. With one source
+of truth there is nothing to reconcile.
+
+Every fill carries a caller-supplied `ref`. A runner that dies after trading
+but before recording will retry on restart, and recording an existing ref is a
+no-op — the retry path is the normal path, not an error path.
+
+`sttbot.paper.PaperRunner` is the loop: check the circuit breaker, price each
+strategy's proposed `Basket` against a fill model, record what clears. Baskets
+are **all-or-nothing** on purpose. The one strategy in this repository with a
+measured positive edge is multi-outcome arbitrage, and a partially filled
+arbitrage is not a smaller arbitrage — it is an unhedged directional bet on
+whichever legs happened to fill. A test pins this: three good legs plus one
+leg with no depth must trade zero legs, not three. Tripping the circuit
+breaker actually flattens open positions through the same account rather than
+only setting a flag, because a kill switch that leaves positions open is not a
+kill switch — also tested directly.
+
+`python examples/paper_trade_polymarket.py` wires this to the Polymarket scan:
+scan the venue, confirm each candidate against live CLOB depth, size it
+atomically, record whatever clears. A live run traded a real four-leg
+arbitrage basket:
+
+```
+4 fills, 0 baskets rejected, equity $981.25
+  FILLED BUY  250 @ 0.0045  fee $0.0557  ...top-selling artist...
+  FILLED BUY  250 @ 0.4400  fee $3.0800  ...
+  FILLED BUY  250 @ 0.0406  fee $0.4867  ...
+  FILLED BUY  250 @ 0.4700  fee $3.1138  ...
+  cash $754.50   market value $226.75   unrealised P&L $-12.01
+```
+
+The unrealised loss is not a bug. Marked at the current bid, a position that
+just crossed the spread to buy shows the spread as an immediate paper loss —
+that is what a real arbitrage position looks like *before* the underlying
+resolves and pays out the guaranteed $1 the basket was built to capture, not
+after. Re-running the script immediately confirmed it does not pile into a
+basket already held (0 new fills, same 4 on disk) and that restarting a
+process picks the ledger up exactly where it left off.
+
+Schedule it (cron, a systemd timer) to let it accumulate a real history rather
+than running it once and calling that a track record.
 
 ## Design notes
 

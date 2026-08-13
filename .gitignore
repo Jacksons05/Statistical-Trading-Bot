@@ -26,3 +26,8 @@ mlruns/
 data/cache/
 *.csv.gz
 football_matches.csv
+
+# Paper-trading runtime state (a running account, its log, its cron lock --
+# all machine-local, never something to commit or share)
+logs/
+*.lock

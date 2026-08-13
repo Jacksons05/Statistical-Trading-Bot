@@ -688,6 +688,46 @@ process picks the ledger up exactly where it left off.
 Schedule it (cron, a systemd timer) to let it accumulate a real history rather
 than running it once and calling that a track record.
 
+### Running on a schedule
+
+`scripts/run_paper_trade_polymarket.sh` wraps the example for cron. It exists
+because a bare `python examples/paper_trade_polymarket.py` in a crontab line
+gets two things wrong:
+
+- **Overlap.** A tick takes roughly 2.5 minutes, almost all of it paginating
+  the gamma API. DuckDB does not support concurrent writers to one file, so a
+  run still in progress when the next one fires must be skipped, not started
+  alongside it — two processes racing on the same database corrupt or error
+  rather than merging. The wrapper holds a lock via `flock` on a dedicated file
+  descriptor (not the `flock command...` form, so a held lock and a failed
+  script stay distinguishable in the log) and skips cleanly if it can't get it.
+- **Unbounded logs.** Left alone, appending forever eventually fills the disk.
+  The wrapper truncates its own log to the last 20 MB before each run.
+
+Installed with:
+
+```bash
+( crontab -l 2>/dev/null; echo "*/15 * * * * $(pwd)/scripts/run_paper_trade_polymarket.sh" ) | crontab -
+```
+
+Fifteen minutes gives roughly 6x margin over the run time. Logs land in
+`logs/paper_trade_polymarket.log`; the account is `paper_polymarket.duckdb` in
+the repo root. Both are gitignored — this is running state, not something to
+commit. Inspect the book any time without disturbing the cron job:
+
+```python
+from sttbot.paper.account import PaperAccount
+acc = PaperAccount("paper_polymarket.duckdb")
+snap = acc.snapshot({})  # {} = unmarked; equity below excludes open positions
+print(f"{len(acc.fills())} fills, cash ${snap.cash:,.2f}, "
+      f"{len(acc.open_positions())} open positions")
+```
+
+Remove the schedule with `crontab -e` (delete the line) or `crontab -r` to
+clear everything. On WSL, cron only runs while the WSL instance is up — it
+does not survive a full Windows shutdown the way a real Linux host's cron
+would.
+
 ## Design notes
 
 - **Testability first.** Clocks and sleep are injected into the order manager

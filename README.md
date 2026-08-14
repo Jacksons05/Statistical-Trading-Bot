@@ -812,9 +812,44 @@ serious money — it just will not hand you any. And since prices are
 well-calibrated wherever they are liquid, that edge has to come from
 information or modelling, not from statistical patterns in the price series.
 
-Untested and the most plausible remaining gap: short-horizon time-series
-effects (momentum and mean reversion around news), which the resolved-history
-dataset now makes measurable.
+### Momentum and mean reversion: tested, and inside the costs
+
+The remaining gap, now closed. Measured on **794 full hourly price paths** in a
+strictly walk-forward panel: at each timestamp the signal uses only prior
+prices and the payoff is the *next* window's move, so nothing about resolution
+enters either side. Windows are stepped by the forward horizon so they never
+overlap, and standard errors are clustered by market.
+
+**Momentum does not exist here.** All eight horizons tested show *negative*
+correlation between past and future moves (−0.027 to −0.109, t from −3.5 to
+−8.9). Buying strength loses at every horizon. The tradeable direction, if
+any, is to fade moves.
+
+**Mean reversion exists, and is not tradeable.** At 24h/24h it grosses 3.5¢
+against a 2.0¢ fee — apparently +1.6¢ of edge. It does not survive scrutiny:
+
+| Test | Result |
+| --- | --- |
+| Delay entry by 1 hour | **36% of the edge vanishes** (3.5¢ → 2.2¢) |
+| …net after fees | +0.25¢ |
+| Add 1¢ round-trip spread | **−0.75¢** |
+| Add 2¢ (typical tradeable book) | −1.75¢ |
+| Horizon smoothness | peaks at 24h, insignificant by 48h (t=1.63), gone at 72h |
+| Where it concentrates | 0.65–0.98, n≈300; the mid-range with the most data is insignificant (t=0.83) |
+
+The one-hour-delay test is the decisive one. A third of the signal dying the
+moment you stop trading at the same tick the signal ends is the signature of
+**bid-ask bounce** — alternating trades at bid and ask manufacture negative
+autocorrelation out of nothing, and no taker can harvest it. What survives is
++2.2¢ gross against a 2.0¢ fee, i.e. the entire effect sits inside the
+transaction cost. Worse, the strategy is least profitable exactly where the
+data is thickest: the quadratic fee peaks at mid-price (2.4¢ at 0.35–0.65,
+where 1,124 of the observations are) and the only significant bands are the
+thin ones at the extremes.
+
+This is the same structural verdict as every other class here. The price
+series genuinely contains reversion — the venue is not efficient in the strong
+sense — but Polymarket's fee schedule is wider than the inefficiency.
 
 ## Design notes
 

@@ -35,6 +35,8 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `data.football` | Loaders for the bulk football dataset **and** football-data.co.uk season CSVs (the only wired-up source carrying a genuine closing line); overround and de-vig helpers. |
 | `strategies.base` | `Strategy` + `Param` — declarative hyperparameters with grid-search introspection (the `# @param` convention, made programmatic). |
 | `strategies.pead` | Micro-cap Post-Earnings Announcement Drift via Standardised Unexpected Earnings (SUE). |
+| `data.earnings` | Earnings surprises (Alpha Vantage, key or cache) joined to keyless Yahoo prices; `trailing_sue` standardises by *prior* surprises only, and `first_tradeable_date` encodes that a post-market report cannot be traded that day. |
+| `backtest.event_study` | Market-adjusted drift measurement: entry at the first genuinely tradeable session, benchmark netted over identical sessions, and the announcement gap reported separately so it can never be booked as drift. |
 | `strategies.dixon_coles` | Dixon-Coles bivariate-Poisson model for low-scoring sports, plus +EV and Closing Line Value helpers. |
 | `strategies.dixon_coles_fit` | Weighted-MLE fitter for the above: per-team attack/defence, home advantage γ and dependence ρ, with exponential time decay, `mean(attack)=0` identifiability, and an analytic gradient. |
 | `backtest.walk_forward` | Walk-forward engine — fit on a trailing window, bet the next matchday, settle after friction. Look-ahead is structurally impossible, not merely intended. |
@@ -850,6 +852,64 @@ thin ones at the extremes.
 This is the same structural verdict as every other class here. The price
 series genuinely contains reversion — the venue is not efficient in the strong
 sense — but Polymarket's fee schedule is wider than the inefficiency.
+
+## PEAD, finally wired to real earnings
+
+`strategies.pead` has existed since the first commit and had never seen an
+earnings surprise. It does now: `data.earnings` pulls Alpha Vantage earnings
+(API key, or a cache written out-of-band) and joins them to keyless Yahoo
+prices, and `backtest.event_study` measures the drift.
+
+PEAD is among the most-published anomalies in finance and among the easiest to
+fake, because every way of faking it is a timing error. Three are enforced in
+code rather than left to the caller:
+
+- **A post-market report is not tradeable that day.** Entry is the first
+  session on or after `first_tradeable_date()`, which shifts post-market
+  announcements to the next day and steps over weekends and holidays. Entering
+  at the announcement close instead captures the overnight repricing and books
+  it as drift — in this sample that gap averages **−1.03%**, comparable to the
+  entire effect being measured.
+- **SUE cannot see the future.** `trailing_sue` standardises by the previous
+  eight surprises only. Using the full-sample dispersion tells a 2015 trade how
+  volatile 2024 was.
+- **Drift is net of the market.** A stock up 4% while the index rose 4% has
+  drifted nowhere.
+
+### The result: not enough data to answer
+
+| SUE bucket | n | Mean excess (20d) | t | Entry gap |
+| --- | --- | --- | --- | --- |
+| < −1.5 | 6 | +1.85% | 0.39 | −0.81% |
+| −1.5 … −0.5 | 12 | +2.91% | 1.19 | −4.75% |
+| −0.5 … +0.5 | 46 | −0.73% | −0.76 | −1.58% |
+| +0.5 … +1.5 | 26 | +1.05% | 0.90 | +0.30% |
+| > +1.5 | 17 | +0.10% | 0.04 | +0.96% |
+
+Long-short at the strategy's default 1.5 threshold: **−0.41%, t = −0.20**.
+
+PEAD predicts that column rises monotonically. It does not — the *biggest
+misses drifted up*, which is the opposite. But the honest reading is not "PEAD
+is dead": it is that **107 events across 2 symbols cannot test this
+hypothesis**, and the shape shown is what noise looks like. A 5-session horizon
+prints +2.15% at t=2.35, which is exactly the kind of number to distrust: one
+of four horizons tried, on 23 events, not persisting at 10, 20 or 40 sessions.
+
+The binding limit is the data channel, not the code. Earnings require a
+credential, and without `ALPHAVANTAGE_API_KEY` they can only arrive through a
+channel that passes through a context window, which caps the universe at a
+dozen symbols. With a key the same example runs on thousands:
+
+```bash
+python examples/pead_event_study.py --symbols AAPL,MSFT,CULP,SCVL,...
+```
+
+Worth noting for whoever runs it at scale: the thesis is specifically about
+*micro-caps*, where institutional non-coverage lets drift persist. This sample
+is half mega-cap (IBM), where PEAD should be arbitraged away, and half
+micro-cap (CULP) — too small to split. A real test needs the universe skewed
+small, and should expect the short leg to be expensive or impossible to borrow
+in exactly the names where the effect is supposed to live.
 
 ## Design notes
 

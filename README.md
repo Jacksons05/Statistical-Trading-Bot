@@ -36,6 +36,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `strategies.base` | `Strategy` + `Param` — declarative hyperparameters with grid-search introspection (the `# @param` convention, made programmatic). |
 | `strategies.pead` | Micro-cap Post-Earnings Announcement Drift via Standardised Unexpected Earnings (SUE). |
 | `data.earnings` | Earnings surprises (Alpha Vantage, key or cache) joined to keyless Yahoo prices; `trailing_sue` standardises by *prior* surprises only, and `first_tradeable_date` encodes that a post-market report cannot be traded that day. |
+| `strategies.earnings_market` | Prices Polymarket's "Will X beat quarterly earnings?" contracts: trailing beat rate shrunk toward the **listed** universe's base rate, a Brier skill control against that base rate, and edge scored against bid/ask rather than the mid. |
 | `backtest.event_study` | Market-adjusted drift measurement: entry at the first genuinely tradeable session, benchmark netted over identical sessions, and the announcement gap reported separately so it can never be booked as drift. |
 | `strategies.dixon_coles` | Dixon-Coles bivariate-Poisson model for low-scoring sports, plus +EV and Closing Line Value helpers. |
 | `strategies.dixon_coles_fit` | Weighted-MLE fitter for the above: per-team attack/defence, home advantage γ and dependence ρ, with exponential time decay, `mean(attack)=0` identifiability, and an analytic gradient. |
@@ -910,6 +911,60 @@ is half mega-cap (IBM), where PEAD should be arbitraged away, and half
 micro-cap (CULP) — too small to split. A real test needs the universe skewed
 small, and should expect the short leg to be expensive or impossible to borrow
 in exactly the names where the effect is supposed to live.
+
+## Polymarket earnings markets: the forecasting edge, priced
+
+The research above concluded this venue pays for a view, not for arbitrage.
+Polymarket runs ~41 live *"Will X beat quarterly earnings?"* contracts, which
+is a forecasting question with a cheap answer: a company's own record of
+beating consensus. `strategies.earnings_market` prices them and
+`examples/polymarket_earnings.py` runs it against the live venue, optionally
+feeding the paper account.
+
+**The base rate is the whole strategy, and it is easy to measure on the wrong
+population.** Measured on real histories:
+
+| Universe | Beat rate |
+| --- | --- |
+| IBM (mega-cap) | 87.9% |
+| HD (large-cap) | 84.5% |
+| CULP (micro-cap) | **53.4%** |
+| Polymarket's median ask on these markets | ~0.90 |
+
+Polymarket lists only large, well-covered names — the ones that guide analysts
+down and beat ~86% of the time. I built the pricer, pooled all three cached
+companies into the prior, and it returned a confident **BUY NO at +3.5¢** on a
+live Home Depot market. Under the correct large-cap prior the same market is
+**−0.1¢: no trade.** One unlisted micro-cap in the average moved the prior 11
+points and manufactured the entire signal.
+
+That failure does not look like a bug. It looks like alpha. The prior is now
+computed strictly from the tickers that actually have live markets, and a test
+reproduces the contamination case directly.
+
+Two further guards, both from lessons measured elsewhere in this repo:
+
+- **Edge is scored against bid and ask, never the mid.** Both sides cross the
+  spread, so with a 5¢ spread and the quadratic fee the model must disagree
+  with the market by roughly 4–6¢ before either side clears. A 16¢-spread
+  market like DKS is untradeable at any conviction.
+- **Ties count as misses**, because the contract says *beat*, not *meet or
+  beat* — and large caps hit consensus exactly quite often (HD did it twice in
+  58 quarters, IBM three times). Whether Polymarket resolves an exact meet as a
+  beat is worth **~4 percentage points**, more than any edge the model claims.
+  Confirm it per market before trading; the cross-venue study already showed
+  resolution wording dominating apparent pricing edges.
+
+The model does carry information — Brier skill of **+0.09** against always
+quoting the base rate, walk-forward — so trailing beat history genuinely
+predicts the next beat. But that is 162 observations across 3 companies, and
+on the one live market priceable today it produces no trade. The market is
+approximately right, which is what the calibration study predicted for a venue
+that is efficient wherever it is liquid.
+
+Scaling this needs earnings history for the ~40 listed tickers, which needs
+`ALPHAVANTAGE_API_KEY`. Without it the cache can only be filled a symbol at a
+time.
 
 ## Design notes
 

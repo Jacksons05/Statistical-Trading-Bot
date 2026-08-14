@@ -728,6 +728,94 @@ clear everything. On WSL, cron only runs while the WSL instance is up — it
 does not survive a full Windows shutdown the way a real Linux host's cron
 would.
 
+## What statistical arbitrage actually works on Polymarket
+
+A systematic sweep of every stat-arb class this venue could support, measured
+against live depth rather than argued from theory. Datasets: a 20,503-event /
+203,768-market open snapshot, **38,993 resolved markets with realized
+outcomes**, and 863 of those with pre-resolution price history.
+
+**Every pure-arbitrage class is exhausted.** Not "competitive" — exhausted,
+by a structural mechanism described below.
+
+| Class | Executable venue-wide | Verdict |
+| --- | --- | --- |
+| negRisk boundary baskets *(deployed)* | **$66** on $2,334 | Marginal, running |
+| Threshold / scope / cross-event consistency | **$6.14** on $1,990 | <1% annualized |
+| YES–NO complementarity | **$0** | Structurally impossible |
+| Cross-venue vs Kalshi | $2,541 on **$810,916** | **−$86,227** vs T-bills |
+| Calibration / favorite-longshot bias | none established | Prices efficient where liquid |
+
+**YES–NO arbitrage cannot exist here.** Measured across liquid markets,
+`NO_ask == 1 − YES_bid` and `NO_bid == 1 − YES_ask`, *exactly*, every time.
+YES and NO are not two books to arbitrage between — the matching engine
+mirrors one book. This is worth stating because treating them as independent
+is a common starting assumption.
+
+**Why arbitrage is structurally dead, not merely crowded.** Polymarket's fee
+is quadratic and peaks at mid-price: a two-leg trade costs
+`2 × 0.05 × 0.25 = 2.5¢/contract` at p=0.50. Any violation smaller than that
+near the middle is unexploitable, so survivors are confined to the tails —
+executed superset prices ran 0.010–0.100 — which is precisely where books are
+thinnest. Fees consumed **63% of gross edge** on the trades that did execute.
+The residual is not being competed away by faster traders; it is being eaten
+by the fee schedule before anyone can reach it.
+
+**Cross-venue is a rules problem wearing a pricing problem's clothes.** Of 30
+randomly sampled "matches", only 14 were genuinely the same question. Every
+large apparent edge was a criteria mismatch: an 84¢ iPhone "arb" was base
+model vs product line; a 40¢ Trump impeachment edge was the single word
+*removed* (impeached-and-convicted vs impeached) — the correct counterpart
+market trades within a cent. Where the two venues disagree by more than 2¢,
+they are describing different events. `venues.prediction`'s refusal to net
+legs without an explicit equivalence declaration is doing real work.
+
+**No calibration edge, and the apparent one was a trap.** Mid-range buckets
+are near-perfectly calibrated (0.35–0.50: priced 0.438, realized 0.426, n=195;
+0.50–0.65: priced 0.555, realized 0.542, n=190). Longshots *appeared*
+underpriced by +13 to +26 points — the reverse of the textbook
+favorite-longshot bias, and a headline result if true. It is not: the effect
+strengthens monotonically with volume (+0.059 → +0.101 → +0.132 across volume
+tiers), which is the signature of selection. A market only accumulates $100k
+of volume when something dramatic happened, and "something happened"
+correlates with YES resolving. At the moment you would place the bet, you do
+not know the market will go on to trade $100k.
+
+### The finding that reframes everything: capacity
+
+Measured from 166 live order books, not from the venue's own metric.
+
+- **`liquidityNum` overstates real 2¢ depth by ~48× venue-wide** ($622M claimed
+  vs $13.0M measured). It ranks, it does not size — within the top 60 markets,
+  where sizing decisions are made, its correlation with real depth collapses to
+  Spearman +0.38 and the error spans four orders of magnitude.
+- **24h volume does not predict depth at all** (Spearman **+0.06** within the
+  top 60).
+- **Median top-of-book notional in the venue's most active markets: $259.**
+- **~99 markets venue-wide** can absorb a $10k buy within 2¢; **~11** can
+  absorb $50k.
+- The 0.40–0.60 price band holds 75,339 markets of which **3% traded**, median
+  spread **94¢** — that is not a middle market, it is untouched books.
+- Sports and Politics carry 80% of volume. Long-dated markets hold 39% of
+  claimed liquidity on 9.5% of volume — that is where `liquidityNum` is parked
+  and nothing trades.
+
+**Realistic capacity for a strategy that takes liquidity and holds to
+resolution: $250k–750k/day of executed notional, centred ~$400k**, across ~118
+qualifying markets. Hard ceiling before you are the market: ~$3.3M/day.
+
+That number is far larger than the arbitrage findings suggest, and it is the
+actual answer to "what works here": **Polymarket has real capacity, but only
+for strategies carrying a forecasting edge.** The free-lunch strategies are
+measured out in tens to low-thousands of dollars. The venue will absorb
+serious money — it just will not hand you any. And since prices are
+well-calibrated wherever they are liquid, that edge has to come from
+information or modelling, not from statistical patterns in the price series.
+
+Untested and the most plausible remaining gap: short-horizon time-series
+effects (momentum and mean reversion around news), which the resolved-history
+dataset now makes measurable.
+
 ## Design notes
 
 - **Testability first.** Clocks and sleep are injected into the order manager

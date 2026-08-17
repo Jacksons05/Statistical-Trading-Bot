@@ -237,6 +237,31 @@ def test_fduk_loader_tolerates_missing_closing_columns(tmp_path):
     assert load_football_data_uk(["1011"], "E0", require_closing=True, paths=[path]) == []
 
 
+def test_fduk_loader_tolerates_a_non_numeric_odds_cell(tmp_path):
+    """Regression: one bad cell used to kill an entire division.
+
+    A stray non-numeric value makes DuckDB type the whole column VARCHAR, and
+    COALESCE then refuses to mix it with a DOUBLE sibling column. Several
+    divisions (I2, SP2, T1) failed to load at all because of a handful of
+    cells. The bad value should become NULL and fall through to the next book.
+    """
+    csv = (
+        "Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A,"
+        "MaxH,MaxD,MaxA,PSCH,PSCD,PSCA,B365CH,B365CD,B365CA\n"
+        # PSCH is junk here; the Bet365 close should be used instead.
+        "E0,11/08/2023,Burnley,Man City,0,3,8.00,5.00,1.40,"
+        "9.00,5.20,1.44,n/a,5.60,1.38,9.10,5.50,1.40\n"
+        "E0,12/08/2023,Arsenal,Forest,2,1,1.30,5.50,10.0,"
+        "1.35,5.75,11.0,1.28,6.00,11.5,1.30,5.80,11.0\n"
+    )
+    path = _write(tmp_path, "dirty.csv", csv)
+    matches = load_football_data_uk(["2324"], "E0", paths=[path])
+
+    assert len(matches) == 2
+    assert matches[0].close_home == pytest.approx(9.10)  # fell through to B365
+    assert matches[1].close_home == pytest.approx(1.28)  # Pinnacle still wins
+
+
 def test_fduk_loader_merges_seasons_in_date_order(tmp_path):
     modern = _write(tmp_path, "modern.csv", _FDUK_MODERN)
     legacy = _write(tmp_path, "legacy.csv", _FDUK_LEGACY)

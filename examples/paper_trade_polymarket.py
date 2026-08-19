@@ -34,8 +34,10 @@ import json
 from sttbot.paper.account import BUY, PaperAccount
 from sttbot.paper.runner import Basket as PaperBasket
 from sttbot.paper.runner import Intent, PaperRunner, limit_fill_model
+from sttbot.paper.settlement import fetch_resolutions, settle_account
 from sttbot.risk.circuit_breaker import RiskCircuitBreaker
 from sttbot.venues.polymarket import (
+    http_fetch,
     complete_baskets,
     executable_arbitrage,
     fetch_book,
@@ -123,6 +125,17 @@ def main() -> None:
     print(f"loading events ({source}) ...", flush=True)
     events = load_events(args.cache)
     print(f"  {len(events):,} events", flush=True)
+
+    # Settle first: a resolved basket pays $1 a set, and nothing else in this
+    # loop ever books that. Skipping it means cash only ever leaves the account
+    # and the reported return drifts down regardless of whether the strategy
+    # works.
+    open_before = set(account.open_positions())
+    if open_before:
+        resolutions = fetch_resolutions(open_before, fetch=http_fetch)
+        report = settle_account(account, resolutions)
+        if report.settled:
+            print(f"  {report.summary()}", flush=True)
 
     already_held = set(account.open_positions())
     candidates = [

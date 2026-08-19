@@ -55,6 +55,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
 | `execution.order_manager` | `DynamicOrderManager` — pre-trade slippage cap + Time-To-Live cancellation. |
 | `risk.circuit_breaker` | High-water-mark **and** rolling-window drawdown kill switch. |
+| `paper.settlement` | Closes positions whose markets have resolved, crediting the payout. Accepts a resolution **only** when outcome prices form a real binary payout — `closed == true` is not sufficient, and settling on it would zero out a winning basket. |
 | `paper` | Durable paper trading: DuckDB-backed account where fills are the only state (cash/positions/P&L are recomputed, never stored), idempotent on a caller-supplied ref, and an all-or-nothing basket runner wired to the circuit breaker. |
 | `monitoring.alerts` | Fail-safe Discord/Telegram webhook notifier (stdlib only). |
 
@@ -965,6 +966,53 @@ that is efficient wherever it is liquid.
 Scaling this needs earnings history for the ~40 listed tickers, which needs
 `ALPHAVANTAGE_API_KEY`. Without it the cache can only be filled a symbol at a
 time.
+
+## Settlement: without it the paper book cannot be measured
+
+A hold-to-resolution strategy pays cash out to buy a basket and collects $1 a
+set when it resolves. `sttbot.paper` did the first half and never the second,
+so cash could only leave the account and the reported return drifted downward
+regardless of whether the strategy worked. The live book showed **−11.7% while
+being worth +0.8%** once its resolved legs were valued.
+
+`paper.settlement` closes the loop. A settlement is recorded as an ordinary
+fill — a sale of the whole position at the settled price — so cash, average
+cost and realised P&L all fall out of the existing ledger with no
+special-casing. Redemption is not a trade, so no fee is charged.
+
+**The hard part is deciding what "resolved" means, and the venue does not say
+it directly.** `closed == true` is *not* sufficient. Surveyed across 60 closed
+Polymarket markets:
+
+| `outcomePrices` | Count | What it actually is |
+| --- | --- | --- |
+| `["0", "0"]` | 36 | closed, no payout written |
+| `["0.58", "0.42"]` | 1 | the last price someone traded at |
+| `["0", "1"]` / `["0.000001", "0.999999"]` | rest | a real settlement |
+
+Settling on the first would **zero out every leg of a basket including the
+winner**, turning a $1 payout into nothing. Settling on the second books a mark
+as if it were an outcome. So a resolution is accepted only when the prices form
+an actual binary payout — summing to 1, one leg ≈1 and the rest ≈0. Anything
+else leaves the position open and is reported, because an unsettled position is
+a knowable state and a wrongly settled one is a silent, permanent error.
+
+Two API details that are silent traps: gamma's `clob_token_ids` filter takes
+**repeated parameters** (a comma-separated list is rejected as "invalid clob
+token ids"), and **`closed=true` is required** or resolved markets are filtered
+out of the default view and every lookup returns empty.
+
+Run live against the account, it settled 12 positions across 3 baskets for
+exactly their face value:
+
+| Basket | Legs | Cost | Payout | Profit |
+| --- | --- | --- | --- | --- |
+| KAROL G album sales | 6 | $4.82 | $5.00 | **+$0.18** |
+| LASK Linz 2nd half | 3 | $10.00 | $10.00 | +$0.00 |
+| Fiorentina 2nd half | 3 | $5.00 | $5.00 | +$0.00 |
+
+That is the arbitrage doing exactly what it claims — and the first time this
+repo has booked a realised outcome rather than a mark.
 
 ## Design notes
 

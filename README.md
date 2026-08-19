@@ -44,6 +44,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
 | `backtest.clv` | Closing-line-value **controls**: what CLV a random selection earns on the same matches (`clv_baseline`), and what an *identically-priced* selection earns (`clv_odds_matched_baseline`, `clv_excess_per_bet`), so neither mechanical CLV nor a longshot preference is mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
+| `venues.kalshi` | Kalshi client with the venue's four traps encoded: enumerate via `/events` (`/markets` is 99.7% parlay spam), the order book is **two bid ladders** so a YES ask is the complement of a NO bid, `mutually_exclusive` is **not** exhaustive, and `liquidity_dollars` reads 0 on markets doing $52k/day. |
 | `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
 | `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
 | `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
@@ -1060,6 +1061,76 @@ mispricing survives precisely where nobody is watching, and not being watched
 is the same property that makes a market slow to resolve and expensive to
 leave. Speed and edge are not independent dials on this venue — they are the
 same dial, pointing opposite ways.
+
+## Kalshi: measurably the better venue, and still not a free lunch
+
+Polymarket's cost structure caps the paper book under 1%, so the obvious
+question is whether another venue is cheaper. Kalshi was measured the same way.
+
+**Its fee is worse.** 7% quadratic against Polymarket's 5% — 3.50% of a 50c
+contract against 2.50%. (An earlier note in this conversation put Kalshi at
+~1.4%; that was wrong.)
+
+**But spread dominates fee, and its spreads are half.** At matched liquidity
+(≥$10k of 24h volume, the same bar used on Polymarket) Kalshi quotes **1c at
+every price band**, p25 through p75:
+
+| Mid | Kalshi spread | Kalshi total | Polymarket total |
+| --- | --- | --- | --- |
+| 0.02–0.15 | 1.00c | 23.2% | 37.9% |
+| 0.15–0.35 | 1.00c | 9.6% | 12.3% |
+| 0.35–0.65 | 1.00c | **5.6%** | 6.6% |
+| 0.65–0.85 | 1.00c | 3.1% | 4.0% |
+| 0.85–0.98 | 1.30c | 2.0% | 2.6% |
+
+**And there is far more of it.** $81.2M of 24h volume against $63M, 17.7% of
+markets traded against 8.9%, and **822 markets clearing the $10k bar against
+Polymarket's 57** — 14× the tradeable inventory, which was the binding capacity
+constraint all along.
+
+### Four traps, all silent
+
+Each produces a confident wrong answer rather than an error, and two caught me
+during the build.
+
+- **`/markets` is 99.7% parlay spam.** A full paginated walk returned 60,000
+  rows that were `KXMVECROSSCATEGORY` auto-generated combinations — 180 real
+  markets. It reported **$15,079** of venue volume against a true ~$81M, an
+  error of ~5,400×, while paginating perfectly. `/events?with_nested_markets=true`
+  is the endpoint that returns real markets.
+- **The order book is two *bid* ladders.** `orderbook_fp` carries `yes_dollars`
+  and `no_dollars` and both are bids — there is no ask ladder. A YES ask is the
+  complement of a NO bid, so buying YES means lifting NO bids. Reading
+  `yes_dollars` as asks prices every trade off the wrong side.
+- **`mutually_exclusive` is not exhaustive.** "LA-01 Republican nominee?" is
+  flagged exclusive, lists two candidates, and their asks sum to **0.108** —
+  an apparent 89c arbitrage that is really a basket whose other legs were never
+  listed. Polymarket's `negRisk` does guarantee exhaustiveness; this does not.
+  `Basket.looks_complete` rejects anything implying more than 10% edge, since
+  measured across 4,468 quoted baskets the ask_sum runs p05 1.000 / median
+  1.090 and only 0.8% fall below 0.90.
+- **`liquidity_dollars` reads 0.0000** on markets doing $52k of daily volume.
+
+### The scan, with the discipline applied
+
+Of 3,621 fully-quoted mutually-exclusive baskets, **28 showed positive edge on
+paper, 5 survived the completeness rule** (23 rejected as missing legs), and
+**3 confirmed against real depth**:
+
+| Event | Size | Capital | Profit |
+| --- | --- | --- | --- |
+| Next Deputy Attorney General | 200 | $190.54 | **$9.46** |
+| Gambian presidential election | 500 | $490.78 | **$9.22** |
+| Dissenting votes, September | 148 | $146.08 | $1.92 |
+
+**$20.60 of profit on $827.40 of capital — 2.5%.** Against Polymarket's $66 on
+$2,334 (2.8%) the per-trade return is comparable, but it is reachable at 14×
+the market count and half the spread, and these are days-to-weeks events rather
+than baskets locked until January 2027.
+
+The fee still sets a hard floor worth stating as a number: three legs at 0.32
+sum to a 4c gross edge and cost 4.57c in fees. **The trade is underwater before
+it is placed.** That is pinned by a test.
 
 ## Design notes
 

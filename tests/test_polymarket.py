@@ -14,6 +14,8 @@ from sttbot.venues.polymarket import (
     OrderBook,
     complete_baskets,
     executable_arbitrage,
+    fetch_book,
+    fetch_book_or_none,
     is_live,
     iter_events,
     market_fee_model,
@@ -284,3 +286,35 @@ def test_executable_arbitrage_stops_at_the_end_of_the_book():
     arb = executable_arbitrage(books, [FeeModel()] * 3, step=5, max_contracts=5000)
     assert arb is not None
     assert arb.contracts == pytest.approx(100)
+
+
+# --- marking a position whose market has resolved ---------------------------
+
+
+def test_fetch_book_raises_so_a_trade_is_never_priced_off_a_failed_read():
+    def boom(url):
+        raise RuntimeError("HTTP Error 404: Not Found")
+
+    with pytest.raises(RuntimeError):
+        fetch_book("tok", fetch=boom)
+
+
+def test_fetch_book_or_none_survives_a_delisted_market():
+    """Regression: this crashed a live paper run on every tick for four days.
+
+    A resolved market's token is delisted and its book 404s permanently. That
+    is terminal, not transient, so marking an existing position must tolerate
+    it -- the position simply has no mark, which Snapshot.unmarked reports.
+    """
+    def boom(url):
+        raise RuntimeError("HTTP Error 404: Not Found")
+
+    assert fetch_book_or_none("tok", fetch=boom) is None
+
+
+def test_fetch_book_or_none_returns_the_book_when_there_is_one():
+    payload = {"asks": [{"price": "0.40", "size": "10"}],
+               "bids": [{"price": "0.30", "size": "10"}]}
+    book = fetch_book_or_none("tok", fetch=lambda url: payload)
+    assert book is not None
+    assert book.best_bid == pytest.approx(0.30)

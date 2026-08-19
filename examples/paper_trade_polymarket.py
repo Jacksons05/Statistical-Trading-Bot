@@ -39,6 +39,7 @@ from sttbot.venues.polymarket import (
     complete_baskets,
     executable_arbitrage,
     fetch_book,
+    fetch_book_or_none,
     iter_events,
 )
 
@@ -149,12 +150,22 @@ def main() -> None:
 
     # Mark every already-open position too, not just this tick's candidates,
     # so equity and the circuit breaker see the whole book.
+    unmarkable = 0
     for symbol in account.open_positions():
         if symbol in marks:
             continue
-        book = fetch_book(symbol)
+        # A resolved market's token is delisted and 404s permanently. That is a
+        # terminal state, not a transient error, so it must not abort the tick:
+        # letting it raise here killed every run for four days.
+        book = fetch_book_or_none(symbol)
+        if book is None:
+            unmarkable += 1
+            continue
         if book.best_bid is not None:
             marks[symbol] = book.best_bid
+    if unmarkable:
+        print(f"  {unmarkable} open position(s) have no live book "
+              "(resolved or delisted) and are excluded from equity")
 
     print(f"  {len(baskets_to_submit)} baskets confirmed against live depth, "
           "submitting", flush=True)

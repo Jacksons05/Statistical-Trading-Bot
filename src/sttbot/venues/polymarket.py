@@ -231,7 +231,33 @@ class OrderBook:
 
 
 def fetch_book(token_id: str, *, fetch: Fetch = http_fetch) -> OrderBook:
+    """The live book for a token. Raises if it cannot be fetched.
+
+    Deliberately strict: a candidate you are about to trade must not be priced
+    off a book you failed to read.
+    """
     return OrderBook.from_payload(fetch(f"{CLOB_BOOK}?token_id={token_id}"))
+
+
+def fetch_book_or_none(
+    token_id: str, *, fetch: Fetch = http_fetch
+) -> OrderBook | None:
+    """The live book, or ``None`` when there isn't one.
+
+    For *marking* an existing position rather than pricing a new trade. When a
+    market resolves its token is delisted and the CLOB returns 404 forever,
+    which is a real terminal state and not a transient failure. Letting that
+    raise killed a paper-trading run on every tick for four days while the
+    account sat frozen, because one held position had resolved.
+
+    Callers should treat ``None`` as "no mark available" and surface it --
+    :attr:`sttbot.paper.account.Snapshot.unmarked` exists for exactly this --
+    rather than substituting a price nobody is quoting.
+    """
+    try:
+        return fetch_book(token_id, fetch=fetch)
+    except Exception:
+        return None
 
 
 # --- multi-outcome baskets --------------------------------------------------

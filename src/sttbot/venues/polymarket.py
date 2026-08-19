@@ -30,6 +30,7 @@ happen and you are simply short them, unhedged.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import time
 import urllib.request
@@ -231,7 +232,33 @@ class OrderBook:
 
 
 def fetch_book(token_id: str, *, fetch: Fetch = http_fetch) -> OrderBook:
+    """The live book for a token. Raises if it cannot be fetched.
+
+    Deliberately strict: a candidate you are about to trade must not be priced
+    off a book you failed to read.
+    """
     return OrderBook.from_payload(fetch(f"{CLOB_BOOK}?token_id={token_id}"))
+
+
+def fetch_book_or_none(
+    token_id: str, *, fetch: Fetch = http_fetch
+) -> OrderBook | None:
+    """The live book, or ``None`` when there isn't one.
+
+    For *marking* an existing position rather than pricing a new trade. When a
+    market resolves its token is delisted and the CLOB returns 404 forever,
+    which is a real terminal state and not a transient failure. Letting that
+    raise killed a paper-trading run on every tick for four days while the
+    account sat frozen, because one held position had resolved.
+
+    Callers should treat ``None`` as "no mark available" and surface it --
+    :attr:`sttbot.paper.account.Snapshot.unmarked` exists for exactly this --
+    rather than substituting a price nobody is quoting.
+    """
+    try:
+        return fetch_book(token_id, fetch=fetch)
+    except Exception:
+        return None
 
 
 # --- multi-outcome baskets --------------------------------------------------
@@ -250,6 +277,34 @@ class Basket:
     fees: tuple[FeeModel, ...]
     liquidity: float
     volume_24h: float
+    end_date: str = ""  # ISO8601 from gamma; "" when the event omits one
+
+    def days_to_resolution(self, now: dt.datetime | None = None) -> float | None:
+        """Days until the event's stated end, or ``None`` if it has none.
+
+        Negative for a market already past its end date. Those are common and
+        not an error -- the venue had 17,296 live markets past their endDate in
+        one snapshot, mostly in-play sport awaiting settlement -- and they are
+        the *fastest* capital to recycle, so they are worth including rather
+        than filtering out.
+
+        The horizon is what decides how long capital sits, and it has nothing
+        to do with the size of the edge: a basket paying 1% in three days and
+        one paying 1% in five months look identical to an edge filter.
+        """
+        if not self.end_date:
+            return None
+        text = self.end_date.replace("Z", "+00:00")
+        try:
+            end = dt.datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=dt.timezone.utc)
+        current = now or dt.datetime.now(dt.timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=dt.timezone.utc)
+        return (end - current).total_seconds() / 86400.0
 
     @property
     def ask_sum(self) -> float:
@@ -303,6 +358,7 @@ def complete_baskets(events: Sequence[dict]) -> list[Basket]:
                 fees=tuple(market_fee_model(m) for m in legs),
                 liquidity=sum(as_float(m.get("liquidityNum"), 0.0) or 0.0 for m in legs),
                 volume_24h=sum(as_float(m.get("volume24hr"), 0.0) or 0.0 for m in legs),
+                end_date=str(event.get("endDate") or ""),
             )
         )
     return baskets

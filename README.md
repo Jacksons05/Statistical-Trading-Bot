@@ -44,6 +44,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `backtest.metrics` | Sharpe, max drawdown, hit rate, ROI on staked capital. |
 | `backtest.clv` | Closing-line-value **controls**: what CLV a random selection earns on the same matches (`clv_baseline`), and what an *identically-priced* selection earns (`clv_odds_matched_baseline`, `clv_excess_per_bet`), so neither mechanical CLV nor a longshot preference is mistaken for skill. |
 | `strategies.prob_arbitrage` | Multi-outcome probability-boundary arbitrage for categorical prediction markets. |
+| `venues.kalshi` | Kalshi client with the venue's four traps encoded: enumerate via `/events` (`/markets` is 99.7% parlay spam), the order book is **two bid ladders** so a YES ask is the complement of a NO bid, `mutually_exclusive` is **not** exhaustive, and `liquidity_dollars` reads 0 on markets doing $52k/day. |
 | `venues.prediction` | Cross-venue prediction-market pricing: per-venue fee models (Kalshi's quadratic, Polymarket's zero), depth-bounded arbitrage sizing, Kelly staking, depth-weighted consensus. |
 | `strategies.market_making` | Scalping/market making on binary contracts: fee-aware spreads, `untradeable_band`, Avellaneda-Stoikov inventory skew, one-sided quoting at inventory limits. |
 | `backtest.mm_simulator` | Market-making simulator with fill mark-out, so adverse selection is measured rather than assumed away. |
@@ -55,6 +56,7 @@ Risk / ops          →  sttbot.risk               drawdown circuit breaker
 | `execution.oms` | `OMS` protocol + in-memory `PaperBroker` for deterministic paper trading. |
 | `execution.order_manager` | `DynamicOrderManager` — pre-trade slippage cap + Time-To-Live cancellation. |
 | `risk.circuit_breaker` | High-water-mark **and** rolling-window drawdown kill switch. |
+| `paper.settlement` | Closes positions whose markets have resolved, crediting the payout. Accepts a resolution **only** when outcome prices form a real binary payout — `closed == true` is not sufficient, and settling on it would zero out a winning basket. |
 | `paper` | Durable paper trading: DuckDB-backed account where fills are the only state (cash/positions/P&L are recomputed, never stored), idempotent on a caller-supplied ref, and an all-or-nothing basket runner wired to the circuit breaker. |
 | `monitoring.alerts` | Fail-safe Discord/Telegram webhook notifier (stdlib only). |
 
@@ -965,6 +967,170 @@ that is efficient wherever it is liquid.
 Scaling this needs earnings history for the ~40 listed tickers, which needs
 `ALPHAVANTAGE_API_KEY`. Without it the cache can only be filled a symbol at a
 time.
+
+## Settlement: without it the paper book cannot be measured
+
+A hold-to-resolution strategy pays cash out to buy a basket and collects $1 a
+set when it resolves. `sttbot.paper` did the first half and never the second,
+so cash could only leave the account and the reported return drifted downward
+regardless of whether the strategy worked. The live book showed **−11.7% while
+being worth +0.8%** once its resolved legs were valued.
+
+`paper.settlement` closes the loop. A settlement is recorded as an ordinary
+fill — a sale of the whole position at the settled price — so cash, average
+cost and realised P&L all fall out of the existing ledger with no
+special-casing. Redemption is not a trade, so no fee is charged.
+
+**The hard part is deciding what "resolved" means, and the venue does not say
+it directly.** `closed == true` is *not* sufficient. Surveyed across 60 closed
+Polymarket markets:
+
+| `outcomePrices` | Count | What it actually is |
+| --- | --- | --- |
+| `["0", "0"]` | 36 | closed, no payout written |
+| `["0.58", "0.42"]` | 1 | the last price someone traded at |
+| `["0", "1"]` / `["0.000001", "0.999999"]` | rest | a real settlement |
+
+Settling on the first would **zero out every leg of a basket including the
+winner**, turning a $1 payout into nothing. Settling on the second books a mark
+as if it were an outcome. So a resolution is accepted only when the prices form
+an actual binary payout — summing to 1, one leg ≈1 and the rest ≈0. Anything
+else leaves the position open and is reported, because an unsettled position is
+a knowable state and a wrongly settled one is a silent, permanent error.
+
+Two API details that are silent traps: gamma's `clob_token_ids` filter takes
+**repeated parameters** (a comma-separated list is rejected as "invalid clob
+token ids"), and **`closed=true` is required** or resolved markets are filtered
+out of the default view and every lookup returns empty.
+
+Run live against the account, it settled 12 positions across 3 baskets for
+exactly their face value:
+
+| Basket | Legs | Cost | Payout | Profit |
+| --- | --- | --- | --- | --- |
+| KAROL G album sales | 6 | $4.82 | $5.00 | **+$0.18** |
+| LASK Linz 2nd half | 3 | $10.00 | $10.00 | +$0.00 |
+| Fiorentina 2nd half | 3 | $5.00 | $5.00 | +$0.00 |
+
+That is the arbitrage doing exactly what it claims — and the first time this
+repo has booked a realised outcome rather than a mark.
+
+## Faster profits: the horizon is where the edge lives
+
+The paper book's capital sits idle because several baskets do not resolve until
+January 2027. Two ways to speed that up were priced, and both fail — for
+opposite reasons that turn out to be the same reason.
+
+**Exiting early costs 6% against a 1% edge.** Priced against the live book, one
+basket at a time:
+
+| | |
+| --- | --- |
+| Sell the whole book at current bids | **−$81.08** |
+| Hold every basket to resolution | **+$8.59** |
+| Cost of scalping instead of holding | **−$89.67** |
+
+Only 1 of 22 baskets could be exited at a profit. The cost scales with leg
+count — 3-leg baskets lose $2–7 on exit, 7-leg baskets lose up to $27 — because
+**a multi-leg basket crosses the spread on every leg, twice.** The edge is ~1%
+of the basket; the round trip is ~6%.
+
+**Filtering to short-dated markets removes the edge entirely.** The obvious
+alternative is to stop entering long-dated baskets. Measured across 7,170
+complete baskets in one venue-wide scan:
+
+| Horizon | Baskets | With edge | Hit rate |
+| --- | --- | --- | --- |
+| past due | 70 | 0 | 0% |
+| < 1 day | 417 | 0 | 0% |
+| 1–7 days | 3,557 | **0** | 0% |
+| 7–30 days | 2,866 | 0 | 0% |
+| 30–180 days | 236 | 1 | 0.42% |
+| 180 days+ | 22 | 1 | **4.55%** |
+
+**Zero positive-edge baskets in 4,044 markets resolving inside a week.** The
+hit rate only becomes non-zero past 30 days and is highest at 180 days+. Two
+successes is a thin sample, but zero out of 4,044 is a real absence rather than
+noise — at even a 0.1% hit rate you would expect four.
+
+`--max-days` exists and is tested, but **defaults to off**, because setting it
+to 7 does not make the strategy faster, it stops it trading.
+
+The economics are consistent with everything else measured here: the
+mispricing survives precisely where nobody is watching, and not being watched
+is the same property that makes a market slow to resolve and expensive to
+leave. Speed and edge are not independent dials on this venue — they are the
+same dial, pointing opposite ways.
+
+## Kalshi: measurably the better venue, and still not a free lunch
+
+Polymarket's cost structure caps the paper book under 1%, so the obvious
+question is whether another venue is cheaper. Kalshi was measured the same way.
+
+**Its fee is worse.** 7% quadratic against Polymarket's 5% — 3.50% of a 50c
+contract against 2.50%. (An earlier note in this conversation put Kalshi at
+~1.4%; that was wrong.)
+
+**But spread dominates fee, and its spreads are half.** At matched liquidity
+(≥$10k of 24h volume, the same bar used on Polymarket) Kalshi quotes **1c at
+every price band**, p25 through p75:
+
+| Mid | Kalshi spread | Kalshi total | Polymarket total |
+| --- | --- | --- | --- |
+| 0.02–0.15 | 1.00c | 23.2% | 37.9% |
+| 0.15–0.35 | 1.00c | 9.6% | 12.3% |
+| 0.35–0.65 | 1.00c | **5.6%** | 6.6% |
+| 0.65–0.85 | 1.00c | 3.1% | 4.0% |
+| 0.85–0.98 | 1.30c | 2.0% | 2.6% |
+
+**And there is far more of it.** $81.2M of 24h volume against $63M, 17.7% of
+markets traded against 8.9%, and **822 markets clearing the $10k bar against
+Polymarket's 57** — 14× the tradeable inventory, which was the binding capacity
+constraint all along.
+
+### Four traps, all silent
+
+Each produces a confident wrong answer rather than an error, and two caught me
+during the build.
+
+- **`/markets` is 99.7% parlay spam.** A full paginated walk returned 60,000
+  rows that were `KXMVECROSSCATEGORY` auto-generated combinations — 180 real
+  markets. It reported **$15,079** of venue volume against a true ~$81M, an
+  error of ~5,400×, while paginating perfectly. `/events?with_nested_markets=true`
+  is the endpoint that returns real markets.
+- **The order book is two *bid* ladders.** `orderbook_fp` carries `yes_dollars`
+  and `no_dollars` and both are bids — there is no ask ladder. A YES ask is the
+  complement of a NO bid, so buying YES means lifting NO bids. Reading
+  `yes_dollars` as asks prices every trade off the wrong side.
+- **`mutually_exclusive` is not exhaustive.** "LA-01 Republican nominee?" is
+  flagged exclusive, lists two candidates, and their asks sum to **0.108** —
+  an apparent 89c arbitrage that is really a basket whose other legs were never
+  listed. Polymarket's `negRisk` does guarantee exhaustiveness; this does not.
+  `Basket.looks_complete` rejects anything implying more than 10% edge, since
+  measured across 4,468 quoted baskets the ask_sum runs p05 1.000 / median
+  1.090 and only 0.8% fall below 0.90.
+- **`liquidity_dollars` reads 0.0000** on markets doing $52k of daily volume.
+
+### The scan, with the discipline applied
+
+Of 3,621 fully-quoted mutually-exclusive baskets, **28 showed positive edge on
+paper, 5 survived the completeness rule** (23 rejected as missing legs), and
+**3 confirmed against real depth**:
+
+| Event | Size | Capital | Profit |
+| --- | --- | --- | --- |
+| Next Deputy Attorney General | 200 | $190.54 | **$9.46** |
+| Gambian presidential election | 500 | $490.78 | **$9.22** |
+| Dissenting votes, September | 148 | $146.08 | $1.92 |
+
+**$20.60 of profit on $827.40 of capital — 2.5%.** Against Polymarket's $66 on
+$2,334 (2.8%) the per-trade return is comparable, but it is reachable at 14×
+the market count and half the spread, and these are days-to-weeks events rather
+than baskets locked until January 2027.
+
+The fee still sets a hard floor worth stating as a number: three legs at 0.32
+sum to a 4c gross edge and cost 4.57c in fees. **The trade is underwater before
+it is placed.** That is pinned by a test.
 
 ## Design notes
 

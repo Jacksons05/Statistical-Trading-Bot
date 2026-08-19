@@ -9,7 +9,15 @@ import datetime as dt
 
 import pytest
 
-from sttbot.paper.account import BUY, SELL, Fill, PaperAccount, Position, _apply
+from sttbot.paper.account import (
+    BUY,
+    SELL,
+    AccountBusy,
+    Fill,
+    PaperAccount,
+    Position,
+    _apply,
+)
 
 TS = dt.datetime(2026, 8, 2, 12, 0, 0)
 
@@ -229,3 +237,64 @@ def test_flat_positions_are_not_reported_as_unmarked():
     acc.record(fill(BUY, 10, 1.0, ref="1"))
     acc.record(fill(SELL, 10, 1.0, ref="2"))
     assert acc.snapshot({}).unmarked == ()
+
+
+# --- concurrent access ------------------------------------------------------
+
+
+def test_a_locked_account_raises_account_busy_not_a_raw_io_error(tmp_path):
+    """DuckDB is single-writer *across processes*, so a cron tick and a human
+    inspecting the book collide routinely. Callers need to tell that apart from
+    a corrupt file.
+
+    Held in a subprocess deliberately: DuckDB permits two connections from
+    within one process, so an in-process test would silently prove nothing.
+    """
+    import subprocess
+    import sys
+    import time as _time
+
+    path = str(tmp_path / "book.duckdb")
+    PaperAccount(path, starting_cash=100.0).close()   # create it
+
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         f"import duckdb,time; c=duckdb.connect({path!r}); time.sleep(8)"]
+    )
+    try:
+        for _ in range(40):            # wait for the child to take the lock
+            _time.sleep(0.1)
+            try:
+                PaperAccount(path, starting_cash=100.0).close()
+            except AccountBusy:
+                break
+        else:
+            pytest.skip("could not observe the lock being held")
+
+        with pytest.raises(AccountBusy):
+            PaperAccount(path, starting_cash=100.0, busy_timeout=0.0)
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_the_lock_clears_once_the_holder_closes(tmp_path):
+    path = str(tmp_path / "book.duckdb")
+    holder = PaperAccount(path, starting_cash=100.0)
+    holder.record(fill(BUY, 5, 1.0, ref="a"))
+    holder.close()
+
+    reopened = PaperAccount(path, starting_cash=100.0, busy_timeout=5.0)
+    assert len(reopened.fills()) == 1
+    reopened.close()
+
+
+def test_a_missing_directory_is_an_error_not_a_busy_signal(tmp_path):
+    """The loose version of this check matched "Could not set lock on file
+    ...: No such file or directory" and would have turned a broken path into a
+    silent skip on every scheduled run."""
+    import duckdb
+    bad = str(tmp_path / "nope" / "deep" / "book.duckdb")
+    with pytest.raises(Exception) as info:
+        PaperAccount(bad, starting_cash=100.0, busy_timeout=0.0)
+    assert not isinstance(info.value, AccountBusy)

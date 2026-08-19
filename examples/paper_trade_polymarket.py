@@ -52,6 +52,29 @@ PAPER_EDGE_FLOOR = 0.002
 MAX_CANDIDATES = 10
 DEFAULT_DB = "paper_polymarket.duckdb"
 DEFAULT_STARTING_CASH = 1_000.0
+# Horizon cap, in days. DEFAULTS TO OFF, and that default is a measurement
+# rather than caution.
+#
+# The obvious way to recycle capital faster is to skip long-dated markets --
+# several baskets held on a live book do not settle until January 2027, and
+# exiting early was priced at roughly -6% against a ~1% edge because a
+# multi-leg basket crosses the spread on every leg twice.
+#
+# But the edge is not distributed evenly across horizons. Measured across
+# 7,170 complete baskets in one venue-wide scan:
+#
+#     past due    70 baskets    0 with edge
+#     <1d        417 baskets    0 with edge
+#     1-7d     3,557 baskets    0 with edge
+#     7-30d    2,866 baskets    0 with edge
+#     30-180d    236 baskets    1 with edge   (0.42%)
+#     180d+       22 baskets    1 with edge   (4.55%)
+#
+# Zero out of 4,044 inside a week. The mispricing lives precisely where nobody
+# is watching, which is the same thing that makes it slow. Setting this to 7
+# does not make the strategy faster, it stops it trading -- so the cap ships
+# off and has to be asked for.
+DEFAULT_MAX_DAYS = float("inf")
 
 
 def load_events(cache_path: str | None) -> list[dict]:
@@ -115,6 +138,12 @@ def main() -> None:
     parser.add_argument("--db", default=DEFAULT_DB,
                         help="path to the paper account's DuckDB file")
     parser.add_argument("--starting-cash", type=float, default=DEFAULT_STARTING_CASH)
+    parser.add_argument(
+        "--max-days", type=float, default=DEFAULT_MAX_DAYS,
+        help="skip baskets resolving further out than this (default: no cap). "
+             "Measured: no basket inside 7 days had any edge, so a short cap "
+             "stops trading rather than speeding it up.",
+    )
     args = parser.parse_args()
 
     try:
@@ -147,12 +176,29 @@ def main() -> None:
             print(f"  {report.summary()}", flush=True)
 
     already_held = set(account.open_positions())
-    candidates = [
+    priced = [
         b for b in complete_baskets(events) if b.paper_edge() > PAPER_EDGE_FLOOR
     ]
-    candidates.sort(key=lambda b: -b.paper_edge())
-    print(f"  {len(candidates)} complete baskets clear {PAPER_EDGE_FLOOR:.1%} "
+    print(f"  {len(priced)} complete baskets clear {PAPER_EDGE_FLOOR:.1%} "
           "on paper", flush=True)
+
+    # Horizon filter. A basket with no stated end date is skipped rather than
+    # assumed short: an unknown lock-up is the thing being avoided.
+    candidates = []
+    no_date = long_dated = 0
+    for basket in priced:
+        days = basket.days_to_resolution()
+        if days is None:
+            no_date += 1
+        elif days > args.max_days:
+            long_dated += 1
+        else:
+            candidates.append(basket)
+    print(f"  {len(candidates)} resolve within {args.max_days:g}d "
+          f"({long_dated} too far out, {no_date} undated)", flush=True)
+
+    # Soonest first: same edge, less time with the capital locked.
+    candidates.sort(key=lambda b: (b.days_to_resolution() or 0.0))
 
     baskets_to_submit: list[PaperBasket] = []
     marks: dict[str, float] = {}

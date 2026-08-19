@@ -6,6 +6,8 @@ wrong answers rather than errors: pagination that silently repeats page one,
 and baskets scored on an incomplete set of outcomes.
 """
 
+import datetime as dt
+
 import pytest
 
 from sttbot.venues.polymarket import (
@@ -318,3 +320,46 @@ def test_fetch_book_or_none_returns_the_book_when_there_is_one():
     book = fetch_book_or_none("tok", fetch=lambda url: payload)
     assert book is not None
     assert book.best_bid == pytest.approx(0.30)
+
+
+# --- resolution horizon -----------------------------------------------------
+
+def _basket(end_date=""):
+    legs = [market(id=str(i), bestBid=0.28, bestAsk=0.30) for i in range(3)]
+    (b,) = complete_baskets([event(legs, endDate=end_date)])
+    return b
+
+
+def test_days_to_resolution_reads_the_event_end_date():
+    now = dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.timezone.utc)
+    assert _basket("2026-08-26T12:00:00Z").days_to_resolution(now) == pytest.approx(7.0)
+    assert _basket("2027-01-12T12:00:00Z").days_to_resolution(now) > 140
+
+
+def test_a_past_due_market_reports_negative_days_not_an_error():
+    """The venue had 17,296 live markets past their endDate in one snapshot,
+    mostly in-play sport. They resolve soonest, so they must stay usable."""
+    now = dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.timezone.utc)
+    assert _basket("2026-08-17T12:00:00Z").days_to_resolution(now) == pytest.approx(-2.0)
+
+
+def test_a_missing_or_unparseable_end_date_is_none_not_zero():
+    """None means "unknown horizon" and gets skipped; zero would read as
+    "resolves today" and be entered eagerly."""
+    now = dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.timezone.utc)
+    assert _basket("").days_to_resolution(now) is None
+    assert _basket("not a date").days_to_resolution(now) is None
+
+
+def test_naive_timestamps_are_treated_as_utc():
+    now = dt.datetime(2026, 8, 19, 12, 0)          # naive
+    assert _basket("2026-08-20T12:00:00Z").days_to_resolution(now) == pytest.approx(1.0)
+
+
+def test_the_horizon_is_independent_of_the_edge():
+    """The whole point: a long-dated basket can look identical on edge."""
+    soon = _basket("2026-08-20T12:00:00Z")
+    far = _basket("2027-01-12T12:00:00Z")
+    assert soon.paper_edge() == pytest.approx(far.paper_edge())
+    now = dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.timezone.utc)
+    assert far.days_to_resolution(now) > 100 * soon.days_to_resolution(now)

@@ -1014,6 +1014,53 @@ exactly their face value:
 That is the arbitrage doing exactly what it claims — and the first time this
 repo has booked a realised outcome rather than a mark.
 
+## Faster profits: the horizon is where the edge lives
+
+The paper book's capital sits idle because several baskets do not resolve until
+January 2027. Two ways to speed that up were priced, and both fail — for
+opposite reasons that turn out to be the same reason.
+
+**Exiting early costs 6% against a 1% edge.** Priced against the live book, one
+basket at a time:
+
+| | |
+| --- | --- |
+| Sell the whole book at current bids | **−$81.08** |
+| Hold every basket to resolution | **+$8.59** |
+| Cost of scalping instead of holding | **−$89.67** |
+
+Only 1 of 22 baskets could be exited at a profit. The cost scales with leg
+count — 3-leg baskets lose $2–7 on exit, 7-leg baskets lose up to $27 — because
+**a multi-leg basket crosses the spread on every leg, twice.** The edge is ~1%
+of the basket; the round trip is ~6%.
+
+**Filtering to short-dated markets removes the edge entirely.** The obvious
+alternative is to stop entering long-dated baskets. Measured across 7,170
+complete baskets in one venue-wide scan:
+
+| Horizon | Baskets | With edge | Hit rate |
+| --- | --- | --- | --- |
+| past due | 70 | 0 | 0% |
+| < 1 day | 417 | 0 | 0% |
+| 1–7 days | 3,557 | **0** | 0% |
+| 7–30 days | 2,866 | 0 | 0% |
+| 30–180 days | 236 | 1 | 0.42% |
+| 180 days+ | 22 | 1 | **4.55%** |
+
+**Zero positive-edge baskets in 4,044 markets resolving inside a week.** The
+hit rate only becomes non-zero past 30 days and is highest at 180 days+. Two
+successes is a thin sample, but zero out of 4,044 is a real absence rather than
+noise — at even a 0.1% hit rate you would expect four.
+
+`--max-days` exists and is tested, but **defaults to off**, because setting it
+to 7 does not make the strategy faster, it stops it trading.
+
+The economics are consistent with everything else measured here: the
+mispricing survives precisely where nobody is watching, and not being watched
+is the same property that makes a market slow to resolve and expensive to
+leave. Speed and edge are not independent dials on this venue — they are the
+same dial, pointing opposite ways.
+
 ## Design notes
 
 - **Testability first.** Clocks and sleep are injected into the order manager

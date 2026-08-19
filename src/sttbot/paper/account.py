@@ -21,6 +21,7 @@ and realised P&L accrues only when a position is reduced or closed.
 from __future__ import annotations
 
 import datetime as dt
+import time
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
@@ -28,6 +29,17 @@ import duckdb
 
 BUY = "BUY"
 SELL = "SELL"
+
+
+class AccountBusy(RuntimeError):
+    """Another process holds the account's write lock.
+
+    DuckDB allows a single writer, so a scheduled tick and a human inspecting
+    the book cannot both hold the file. That is a routine collision rather than
+    a fault, and callers should skip the tick rather than crash -- a stack
+    trace in a cron log looks identical to a real failure and buries the ones
+    that matter.
+    """
 
 
 @dataclass(frozen=True)
@@ -142,11 +154,16 @@ class PaperAccount:
     Use ``":memory:"`` for tests; a filesystem path to survive restarts.
     """
 
-    def __init__(self, path: str = ":memory:", starting_cash: float = 10_000.0):
+    def __init__(
+        self,
+        path: str = ":memory:",
+        starting_cash: float = 10_000.0,
+        busy_timeout: float = 0.0,
+    ):
         if starting_cash <= 0:
             raise ValueError("starting_cash must be positive")
         self.path = path
-        self._con = duckdb.connect(path)
+        self._con = self._connect(path, busy_timeout)
         self._con.execute(
             """
             CREATE TABLE IF NOT EXISTS fills (
@@ -178,6 +195,31 @@ class PaperAccount:
             # An existing book keeps its original capital base. Silently
             # adopting a new one would rewrite the return series.
             self.starting_cash = float(existing[0])
+
+    @staticmethod
+    def _connect(path: str, busy_timeout: float):
+        """Open the store, waiting out a transient writer if asked.
+
+        Raises :class:`AccountBusy` rather than DuckDB's IOException so callers
+        can distinguish "someone else has it" from a corrupt or missing file.
+        """
+        deadline = time.monotonic() + max(busy_timeout, 0.0)
+        while True:
+            try:
+                return duckdb.connect(path)
+            except duckdb.IOException as exc:
+                # Match the contention message specifically. A looser test on
+                # "lock" also catches "Could not set lock on file ...: No such
+                # file or directory", so a genuinely broken path would be
+                # reported as busy and every scheduled tick would skip in
+                # silence rather than fail.
+                if "conflicting lock" not in str(exc).lower():
+                    raise
+                if time.monotonic() >= deadline:
+                    raise AccountBusy(
+                        f"{path} is locked by another process"
+                    ) from exc
+                time.sleep(0.5)
 
     # --- writing ---------------------------------------------------------
 

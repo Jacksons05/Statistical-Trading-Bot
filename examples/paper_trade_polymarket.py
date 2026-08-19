@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from sttbot.paper.account import BUY, PaperAccount
+from sttbot.paper.account import BUY, AccountBusy, PaperAccount
 from sttbot.paper.runner import Basket as PaperBasket
 from sttbot.paper.runner import Intent, PaperRunner, limit_fill_model
 from sttbot.paper.settlement import fetch_resolutions, settle_account
@@ -117,7 +117,16 @@ def main() -> None:
     parser.add_argument("--starting-cash", type=float, default=DEFAULT_STARTING_CASH)
     args = parser.parse_args()
 
-    account = PaperAccount(args.db, starting_cash=args.starting_cash)
+    try:
+        # Wait briefly for a concurrent tick or a human inspecting the book to
+        # finish. DuckDB is single-writer, and a stack trace in a cron log
+        # looks exactly like a real failure -- which is how 362 genuine crashes
+        # went unnoticed for four days.
+        account = PaperAccount(args.db, starting_cash=args.starting_cash,
+                               busy_timeout=30.0)
+    except AccountBusy as exc:
+        print(f"account busy ({exc}); skipping this tick")
+        return
     breaker = RiskCircuitBreaker()  # 5% high-water-mark and rolling drawdown
     runner = PaperRunner(account=account, breaker=breaker, fill_model=limit_fill_model)
 

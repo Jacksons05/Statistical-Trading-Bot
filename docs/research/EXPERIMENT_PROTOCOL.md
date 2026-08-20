@@ -63,12 +63,37 @@ dicts, tolerant of schema drift across older entries).
 **What this module deliberately does not do**: compute the Deflated Sharpe
 Ratio, Probability of Backtest Overfitting, or a multiple-testing correction.
 Those statistics require a meaningful trial count (dozens+) to be anything
-but noise, and this repository's actual trial history (visible in `git log`
-— PEAD, earnings-market, thin-market CLV, momentum/mean-reversion, breadth,
-token-cohort survival) has not yet been run *through* the registry, since it
-predates it. Backfilling those historical trials' true parameters/results
-into the log, then computing DSR/PBO honestly over the real trial count, is
-the concrete next step — not fabricating a DSR number now from an empty log.
+but noise, and doing them now, over 13 trials, would produce a number with
+no real information content — a false precision the assignment brief
+specifically warns against.
+
+## Backfilled history
+
+`scripts/backfill_experiment_log.py` populates
+`experiments/sttbot_history.jsonl` with **13 real historical trials**,
+transcribed from the commit message of the commit that produced each one
+(the `code_version` field on every record cites the exact short SHA). This
+repo's research predates the registry, so the log would otherwise start
+empty as if no trials had happened — that would misrepresent the actual
+trial count going into any later multiple-testing correction. Nothing in
+the backfill is estimated or invented; several records log clean **negative**
+or inconclusive results on purpose (Dixon-Coles 1X2 betting is unprofitable
+in all 7 tested divisions; momentum doesn't exist; the token payoff-tail
+cohort couldn't resolve its own headline statistic) because the registry's
+value is recording failed hypotheses too, not curating the wins.
+
+```bash
+python3 -c "
+from sttbot.research.experiment_log import load_experiments
+for r in load_experiments('experiments/sttbot_history.jsonl'):
+    print(r['code_version'], '-', r['strategy'])
+"
+```
+
+13 trials is still not enough for a meaningful DSR/PBO calculation — that
+remains the concrete next step once more trials accumulate through the
+registry going forward, not something to compute now for the sake of having
+a number.
 
 ## Required reporting per trial (already partially met, registry makes it durable)
 

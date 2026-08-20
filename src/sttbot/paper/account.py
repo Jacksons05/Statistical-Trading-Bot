@@ -21,8 +21,8 @@ and realised P&L accrues only when a position is reduced or closed.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Iterable
 
 import duckdb
 

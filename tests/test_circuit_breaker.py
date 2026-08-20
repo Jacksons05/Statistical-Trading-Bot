@@ -1,6 +1,7 @@
 import pytest
 
 from sttbot.execution.oms import PaperBroker
+from sttbot.monitoring.alerts import Notifier
 from sttbot.risk.circuit_breaker import RiskCircuitBreaker
 
 
@@ -70,3 +71,44 @@ def test_negative_equity_rejected(broker):
     cb = RiskCircuitBreaker()
     with pytest.raises(ValueError):
         cb.evaluate(-1.0, broker)
+
+
+def test_drawdown_trip_pages_notifier(broker):
+    sent: list[tuple[str, str]] = []
+    notifier = Notifier()
+    notifier.send = lambda message, level: sent.append((level.value, message)) or True
+
+    cb = RiskCircuitBreaker(max_drawdown=0.05, notifier=notifier)
+    cb.evaluate(10_000, broker)
+    cb.evaluate(9_400, broker)  # trips
+
+    assert len(sent) == 1
+    assert sent[0][0] == "CRITICAL"
+    assert "drawdown" in sent[0][1]
+    assert cb.trip_reason and "drawdown" in cb.trip_reason
+
+
+def test_manual_trip_flattens_and_pages(broker):
+    sent: list[str] = []
+    notifier = Notifier()
+    notifier.send = lambda message, level: sent.append(message) or True
+
+    cb = RiskCircuitBreaker(notifier=notifier)
+    cb.trip_manually(broker, "stale data feed")
+
+    assert cb.tripped is True
+    assert "manual: stale data feed" in cb.trip_reason
+    assert broker.trading_enabled is False
+    assert all(p == 0.0 for p in broker.positions.values())
+    assert len(sent) == 1 and "stale data feed" in sent[0]
+
+    # Latched: a second manual trip (or drawdown trip) does not re-page.
+    cb.trip_manually(broker, "second reason")
+    assert len(sent) == 1
+
+
+def test_no_notifier_is_silent_by_default(broker):
+    cb = RiskCircuitBreaker(max_drawdown=0.05)
+    cb.evaluate(10_000, broker)
+    cb.evaluate(9_000, broker)  # trips, but notifier is None -> no error, no page
+    assert cb.tripped is True

@@ -6,7 +6,6 @@ anchoring entry to the wrong price, letting unmeasurable pools count as
 outcomes, and estimating a tail index from too few points.
 """
 
-import math
 
 import pytest
 

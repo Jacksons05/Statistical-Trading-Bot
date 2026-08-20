@@ -10,14 +10,19 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "numpy>=1.26",
-    "duckdb>=0.10",
-    "pandas>=2.0",
-    "scipy>=1.11",  # L-BFGS-B for the Dixon-Coles MLE fitter
+    # Floors record the oldest version this codebase is known to work
+    # against; ceilings are the next untested major, so a fresh install
+    # cannot silently jump onto a major release nobody has run the suite
+    # against here. Bump the ceiling deliberately, after running the tests,
+    # not by omission.
+    "numpy>=1.26,<3",
+    "duckdb>=1.0,<2",
+    "pandas>=2.0,<3",
+    "scipy>=1.11,<2",  # L-BFGS-B for the Dixon-Coles MLE fitter
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0,<10", "ruff>=0.6,<1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -26,3 +31,15 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F"]
+# E741 (ambiguous name `l`) fires on OHLC `(o, h, l, c)` tuples in test
+# helpers, which is the standard, unambiguous name in that domain.
+# E501 on tests/test_datasets.py's CSV fixture header would mean wrapping a
+# literal data row, which is worse than the line-length rule it's avoiding.
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E741", "E501"]

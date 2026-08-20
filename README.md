@@ -984,6 +984,30 @@ time.
   earns is not evidence. `backtest.clv` makes that baseline a first-class
   object rather than something a reader is trusted to remember.
 
+## Further documentation
+
+A 2026-08-20 audit/research/architecture pass added:
+
+- [`docs/audits/POLYMARKET_BOT_AUDIT.md`](docs/audits/POLYMARKET_BOT_AUDIT.md) —
+  full-repository audit with file:line evidence, a prioritized remediation
+  table, and an explicit verification that no live-order-submission code
+  exists anywhere in this repository.
+- [`docs/research/POLYMARKET_QUANT_RESEARCH.md`](docs/research/POLYMARKET_QUANT_RESEARCH.md) —
+  current Polymarket platform mechanics (confirms `py-clob-client` is
+  archived; this repo never depended on it), academic literature review, and
+  open-source comparison.
+- [`docs/architecture/TARGET_ARCHITECTURE.md`](docs/architecture/TARGET_ARCHITECTURE.md) —
+  maps what's already built against a broader target, and explains what was
+  deliberately deferred (a general cross-market constraint graph beyond
+  `prob_arbitrage.py`'s boundary case; cross-venue lead-lag) and why.
+- [`docs/research/EXPERIMENT_PROTOCOL.md`](docs/research/EXPERIMENT_PROTOCOL.md) —
+  documents this repo's existing walk-forward/baseline/survivorship
+  discipline and the new `sttbot.research.experiment_log` registry.
+- [`docs/operations/PAPER_TRADING_RUNBOOK.md`](docs/operations/PAPER_TRADING_RUNBOOK.md) and
+  [`docs/operations/LIVE_READINESS_CHECKLIST.md`](docs/operations/LIVE_READINESS_CHECKLIST.md) —
+  how to run and troubleshoot paper trading, and every unmet precondition for
+  live capital (there are several; none have been done).
+
 ## Scope & disclaimer
 
 This is research/engineering scaffolding, not financial advice and not a

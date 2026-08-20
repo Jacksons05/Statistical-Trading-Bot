@@ -14,6 +14,7 @@ from .backtest.walk_forward import Bet, BacktestResult, walk_forward_backtest
 from .economics.friction import FrictionModel, should_use_maker
 from .execution.oms import OMS, PaperBroker
 from .execution.order_manager import DynamicOrderManager, ExecutionResult
+from .research.experiment_log import ExperimentRecord, append_experiment, load_experiments
 from .risk.circuit_breaker import RiskCircuitBreaker
 from .strategies.amm import (
     ArbTrade,
@@ -68,6 +69,9 @@ __all__ = [
     "DynamicOrderManager",
     "ExecutionResult",
     "RiskCircuitBreaker",
+    "ExperimentRecord",
+    "append_experiment",
+    "load_experiments",
     "Param",
     "Signal",
     "Strategy",

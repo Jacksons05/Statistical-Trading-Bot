@@ -10,7 +10,6 @@ import pytest
 
 from sttbot.venues.polymarket import (
     CURSOR_REQUEST_PARAM,
-    Basket,
     OrderBook,
     complete_baskets,
     executable_arbitrage,

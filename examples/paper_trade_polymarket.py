@@ -31,6 +31,9 @@ from __future__ import annotations
 import argparse
 import json
 
+import os
+
+from sttbot.monitoring.alerts import Notifier
 from sttbot.paper.account import BUY, PaperAccount
 from sttbot.paper.runner import Basket as PaperBasket
 from sttbot.paper.runner import Intent, PaperRunner, limit_fill_model
@@ -115,7 +118,11 @@ def main() -> None:
     args = parser.parse_args()
 
     account = PaperAccount(args.db, starting_cash=args.starting_cash)
-    breaker = RiskCircuitBreaker()  # 5% high-water-mark and rolling drawdown
+    # Optional: set ALERT_WEBHOOK_URL to page a Discord/Telegram channel when
+    # the breaker trips. With no webhook configured this stays a no-op (the
+    # trip is still logged), so nothing changes for a bare local run.
+    notifier = Notifier(webhook_url=os.environ.get("ALERT_WEBHOOK_URL"))
+    breaker = RiskCircuitBreaker(notifier=notifier)  # 5% high-water-mark and rolling drawdown
     runner = PaperRunner(account=account, breaker=breaker, fill_model=limit_fill_model)
 
     source = f"cache {args.cache}" if args.cache else "live scan"

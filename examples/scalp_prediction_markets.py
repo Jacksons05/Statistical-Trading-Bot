@@ -24,7 +24,7 @@ from sttbot.strategies.market_making import (
     breakeven_spread,
     untradeable_band,
 )
-from sttbot.venues.prediction import KALSHI_FEES, POLYMARKET_FEES, FeeModel
+from sttbot.venues.prediction import KALSHI_FEES, FeeModel
 
 
 def where_can_you_quote() -> None:

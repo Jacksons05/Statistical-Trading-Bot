@@ -32,7 +32,6 @@ import time
 from sttbot.backtest.cohort import (
     detect_clone_groups,
     CohortMember,
-    best_take_profit,
     expected_value_with_take_profit,
     measure_outcomes,
     summarise,

@@ -27,7 +27,7 @@ import os
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 ALPHAVANTAGE = "https://www.alphavantage.co/query?function=EARNINGS&symbol={}&apikey={}"
 YAHOO_CHART = (

@@ -20,7 +20,6 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
-from ..execution.oms import OMS
 from ..risk.circuit_breaker import RiskCircuitBreaker
 from .account import BUY, SELL, Fill, PaperAccount, Snapshot
 

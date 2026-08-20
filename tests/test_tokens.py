@@ -12,7 +12,6 @@ from sttbot.data.tokens import (
     geckoterminal_new_pools,
     geckoterminal_top_tokens,
     pool_ohlcv,
-    TokenPair,
     goplus_security,
     latest_token_addresses,
     pairs_for_tokens,

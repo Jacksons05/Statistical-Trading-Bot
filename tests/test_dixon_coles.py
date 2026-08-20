@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 
 from sttbot.strategies.dixon_coles import (

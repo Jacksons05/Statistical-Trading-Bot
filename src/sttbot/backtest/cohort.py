@@ -24,7 +24,6 @@ tool for exactly this question and reports the alpha the Monte Carlo needs.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 

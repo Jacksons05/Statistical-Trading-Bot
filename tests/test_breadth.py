@@ -11,7 +11,6 @@ import pytest
 
 from sttbot.strategies.amm import Pool
 from sttbot.strategies.breadth import (
-    Allocation,
     BreadthParams,
     Candidate,
     allocate,

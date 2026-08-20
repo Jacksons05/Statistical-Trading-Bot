@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from ..execution.oms import OMS
+from ..monitoring.alerts import Notifier
 
 
 @dataclass
@@ -26,9 +27,13 @@ class RiskCircuitBreaker:
     rolling_window_seconds: float = 24 * 3600
     max_rolling_drawdown: float = 0.05
     clock: Callable[[], float] = time.monotonic
+    # Paged on every trip (drawdown or manual). None keeps the breaker silent,
+    # same as before this was added, so existing callers are unaffected.
+    notifier: Notifier | None = None
 
     peak_equity: float | None = None
     tripped: bool = False
+    trip_reason: str = ""
     _history: deque = field(default_factory=deque)
 
     def evaluate(self, current_equity: float, oms: OMS) -> bool:
@@ -55,9 +60,21 @@ class RiskCircuitBreaker:
         rolling_dd = self._drawdown(rolling_peak, current_equity)
 
         if hwm_dd >= self.max_drawdown or rolling_dd >= self.max_rolling_drawdown:
-            self._trip(oms, max(hwm_dd, rolling_dd))
+            dd = max(hwm_dd, rolling_dd)
+            self._trip(oms, f"drawdown {dd:.1%} (hwm={hwm_dd:.1%}, rolling={rolling_dd:.1%})")
             return False
         return True
+
+    def trip_manually(self, oms: OMS, reason: str) -> None:
+        """Operator/external kill switch, independent of the drawdown checks.
+
+        For a signal handler, a sentinel-file check, or a data-quality/
+        reconciliation failure elsewhere in the system that should halt
+        trading even though equity itself looks fine.
+        """
+        if self.tripped:
+            return
+        self._trip(oms, f"manual: {reason}")
 
     @staticmethod
     def _drawdown(peak: float, current: float) -> float:
@@ -70,12 +87,16 @@ class RiskCircuitBreaker:
         while self._history and self._history[0][0] < cutoff:
             self._history.popleft()
 
-    def _trip(self, oms: OMS, drawdown: float) -> None:
+    def _trip(self, oms: OMS, reason: str) -> None:
         self.tripped = True
+        self.trip_reason = reason
         oms.cancel_all_open_orders()
         oms.flatten_all_positions()
         oms.disable_trading_loop()
+        if self.notifier is not None:
+            self.notifier.critical(f"circuit breaker tripped: {reason}")
 
     def reset(self) -> None:
         """Clear the latch after manual review; keeps the equity history."""
         self.tripped = False
+        self.trip_reason = ""

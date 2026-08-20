@@ -134,9 +134,9 @@ def main() -> None:
             rationale=f"{ticker} earnings beat @ model {forecast.probability:.3f}",
         ))
 
-    print(f"\n  no-trade band exists because both sides cross the spread: with a")
-    print(f"  5c spread and the quadratic fee, the model has to disagree with the")
-    print(f"  market by roughly 4-6c before either side clears.")
+    print("\n  no-trade band exists because both sides cross the spread: with a")
+    print("  5c spread and the quadratic fee, the model has to disagree with the")
+    print("  market by roughly 4-6c before either side clears.")
 
     if not args.paper:
         print(f"\n{len(baskets)} tradeable signal(s); dry run, nothing recorded.")
